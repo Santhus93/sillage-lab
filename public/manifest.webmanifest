@@ -1,0 +1,32 @@
+{
+  "name": "Sillage Lab",
+  "short_name": "Sillage",
+  "description": "Laboratorio de formulacao e maceracao da Sillage Perfumaria",
+  "start_url": "/sillage-lab/",
+  "scope": "/sillage-lab/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#12100E",
+  "theme_color": "#12100E",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "icone-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icone-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icone-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

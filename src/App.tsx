@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - APP PRINCIPAL
 // Arquivo: src/App.tsx
-// Login via Firebase + menu responsivo + navegacao
+// v3: sem titulo duplicado + convite para instalar (PWA)
 // ============================================================
 
 import { useState, useEffect } from 'react';
@@ -30,6 +30,7 @@ import {
   Tooltip,
   CircularProgress,
   Link,
+  Snackbar,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -42,6 +43,7 @@ import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
 import CloudDoneIcon from '@mui/icons-material/CloudDone';
+import InstallMobileIcon from '@mui/icons-material/InstallMobile';
 
 import theme, { cores } from './theme/theme';
 import Marca from './components/Marca';
@@ -53,7 +55,13 @@ import {
   recuperarSenha,
   traduzirErro,
 } from './data/auth';
-import { ehDiaDeRotina, listarLotes, listarManutencoes, loteEmMaceracao, mesmoDia } from './data/db';
+import {
+  ehDiaDeRotina,
+  listarLotes,
+  listarManutencoes,
+  loteEmMaceracao,
+  mesmoDia,
+} from './data/db';
 
 import Dashboard from './pages/Dashboard';
 import Perfumes from './pages/Perfumes';
@@ -84,16 +92,6 @@ const MENU: { id: Tela; texto: string; icone: ReactNode }[] = [
   { id: 'config', texto: 'Configuracoes', icone: <SettingsIcon /> },
 ];
 
-const TITULOS: Record<Tela, string> = {
-  dashboard: 'Dashboard',
-  perfumes: 'Perfumes',
-  formulas: 'Formulas',
-  lotes: 'Lotes',
-  maceracao: 'Maceracao',
-  materias: 'Materias-Primas',
-  config: 'Configuracoes',
-};
-
 function saudacao(): string {
   const h = new Date().getHours();
   if (h < 5) return 'Boa madrugada';
@@ -102,8 +100,14 @@ function saudacao(): string {
   return 'Boa noite';
 }
 
+// Evento de instalacao do PWA (tipagem minima)
+interface EventoInstalacao extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: string }>;
+}
+
 // ------------------------------------------------------------
-// TELA DE LOGIN
+// LOGIN
 // ------------------------------------------------------------
 function Login() {
   const [email, setEmail] = useState('');
@@ -122,10 +126,8 @@ function Login() {
     setEnviando(true);
     try {
       await fazerLogin(email, senha);
-      // o observador no App cuida da troca de tela
     } catch (e) {
-      const codigo = (e as { code?: string }).code ?? '';
-      setErro(traduzirErro(codigo));
+      setErro(traduzirErro((e as { code?: string }).code ?? ''));
     } finally {
       setEnviando(false);
     }
@@ -142,8 +144,7 @@ function Login() {
       await recuperarSenha(email);
       setAviso('Link de redefinicao enviado para seu e-mail.');
     } catch (e) {
-      const codigo = (e as { code?: string }).code ?? '';
-      setErro(traduzirErro(codigo));
+      setErro(traduzirErro((e as { code?: string }).code ?? ''));
     }
   }
 
@@ -211,12 +212,7 @@ function Login() {
           {erro && <Alert severity="error">{erro}</Alert>}
           {aviso && <Alert severity="success">{aviso}</Alert>}
 
-          <Button
-            variant="contained"
-            size="large"
-            onClick={entrar}
-            disabled={enviando}
-          >
+          <Button variant="contained" size="large" onClick={entrar} disabled={enviando}>
             {enviando ? 'Entrando...' : 'Entrar'}
           </Button>
 
@@ -243,7 +239,7 @@ function Login() {
 }
 
 // ------------------------------------------------------------
-// CONTEUDO DO MENU
+// MENU
 // ------------------------------------------------------------
 function ConteudoMenu({
   tela,
@@ -291,10 +287,7 @@ function ConteudoMenu({
               }}
             >
               <ListItemIcon
-                sx={{
-                  color: ativo ? cores.dourado : cores.cinzaMedio,
-                  minWidth: 40,
-                }}
+                sx={{ color: ativo ? cores.dourado : cores.cinzaMedio, minWidth: 40 }}
               >
                 {item.id === 'maceracao' && pendentes > 0 ? (
                   <Badge
@@ -354,17 +347,33 @@ function ConteudoMenu({
 }
 
 // ------------------------------------------------------------
-// LAYOUT PRINCIPAL
+// LAYOUT
 // ------------------------------------------------------------
 function Layout({ user }: { user: User }) {
   const [tela, setTela] = useState<Tela>('dashboard');
   const [gaveta, setGaveta] = useState(false);
   const [pendentes, setPendentes] = useState(0);
+  const [instalar, setInstalar] = useState<EventoInstalacao | null>(null);
 
   const celular = useMediaQuery(theme.breakpoints.down('md'));
   const nome = nomeExibicao(user);
 
-  // Conta os lotes que aguardam a rotina de hoje
+  // Captura o convite de instalacao do navegador
+  useEffect(() => {
+    function aoPoderInstalar(e: Event) {
+      e.preventDefault();
+      setInstalar(e as EventoInstalacao);
+    }
+    window.addEventListener('beforeinstallprompt', aoPoderInstalar);
+    return () => window.removeEventListener('beforeinstallprompt', aoPoderInstalar);
+  }, []);
+
+  async function instalarApp() {
+    if (!instalar) return;
+    await instalar.prompt();
+    setInstalar(null);
+  }
+
   useEffect(() => {
     let ativo = true;
     (async () => {
@@ -381,9 +390,7 @@ function Layout({ user }: { user: User }) {
         const qtd = lotes.filter(
           (l) =>
             loteEmMaceracao(l) &&
-            !manutencoes.some(
-              (m) => m.loteId === l.id && mesmoDia(m.data, new Date())
-            )
+            !manutencoes.some((m) => m.loteId === l.id && mesmoDia(m.data, new Date()))
         ).length;
         if (ativo) setPendentes(qtd);
       } catch {
@@ -450,15 +457,17 @@ function Layout({ user }: { user: User }) {
             </IconButton>
           )}
 
-          {celular ? (
-            <Marca tamanho="pequeno" comSimbolo={false} />
-          ) : (
-            <Typography variant="h5" sx={{ color: cores.branco }}>
-              {TITULOS[tela]}
-            </Typography>
-          )}
+          {celular && <Marca tamanho="pequeno" comSimbolo={false} />}
 
           <Box sx={{ flexGrow: 1 }} />
+
+          {instalar && (
+            <Tooltip title="Instalar como aplicativo">
+              <IconButton color="inherit" onClick={instalarApp} size="small">
+                <InstallMobileIcon fontSize="small" sx={{ color: cores.dourado }} />
+              </IconButton>
+            </Tooltip>
+          )}
 
           <Typography
             variant="body2"
@@ -478,7 +487,6 @@ function Layout({ user }: { user: User }) {
         </Toolbar>
       </AppBar>
 
-      {/* Menu celular */}
       <Drawer
         variant="temporary"
         open={gaveta}
@@ -496,7 +504,6 @@ function Layout({ user }: { user: User }) {
         <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />
       </Drawer>
 
-      {/* Menu desktop */}
       <Drawer
         variant="permanent"
         sx={{
@@ -528,6 +535,17 @@ function Layout({ user }: { user: User }) {
           {renderTela()}
         </Box>
       </Box>
+
+      <Snackbar
+        open={Boolean(instalar) && celular}
+        message="Instale o Sillage Lab na tela de inicio"
+        action={
+          <Button size="small" onClick={instalarApp} sx={{ color: cores.dourado }}>
+            Instalar
+          </Button>
+        }
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      />
     </Box>
   );
 }

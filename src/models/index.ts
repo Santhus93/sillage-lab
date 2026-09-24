@@ -1,8 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MODELO DE DADOS
 // Arquivo: src/models/index.ts
-// Stack: React + TypeScript + Vite + LocalStorage
-// v2: inclui rotina de manutencao (agitar / arejar)
+// v3: consumo de materia-prima e custo por lote
 // ============================================================
 
 
@@ -10,7 +9,6 @@
 // 1. ENUMS E TIPOS BASE
 // ------------------------------------------------------------
 
-// Concentracao / tipo do perfume (define a maceracao padrao)
 export type Concentracao =
   | 'Colonia'      // ~15 dias
   | 'EDT'          // ~30 dias
@@ -18,10 +16,7 @@ export type Concentracao =
   | 'Parfum'       // ~60 dias
   | 'Extrait';     // ~90 dias
 
-export type Categoria =
-  | 'Masculino'
-  | 'Feminino'
-  | 'Unissex';
+export type Categoria = 'Masculino' | 'Feminino' | 'Unissex';
 
 export type FamiliaOlfativa =
   | 'Citrico'
@@ -35,151 +30,68 @@ export type FamiliaOlfativa =
   | 'Aquatico'
   | 'Couro';
 
-// Status "vivo" do perfume (nao muda com o tempo)
-export type StatusPerfume =
-  | 'Ativo'
-  | 'Em Desenvolvimento'
-  | 'Arquivado';
+export type StatusPerfume = 'Ativo' | 'Em Desenvolvimento' | 'Arquivado';
 
-// Status calculado do lote (muda com o tempo / maceracao)
 export type StatusLote =
-  | 'Macerando'         // ainda dentro do periodo
-  | 'Pronto para Teste' // atingiu marco intermediario
-  | 'Pronto para Venda' // concluiu maceracao total
-  | 'Descartado';       // reprovado
+  | 'Macerando'
+  | 'Pronto para Teste'
+  | 'Pronto para Venda'
+  | 'Descartado';
 
-// Unidade da materia-prima
 export type UnidadeMedida = 'g' | 'ml' | 'un';
 
-// Papel do ingrediente na piramide olfativa
 export type NotaPiramide = 'Saida' | 'Corpo' | 'Fundo' | 'Fixador' | 'Solvente';
 
-// Dia da semana (0 = domingo ... 6 = sabado) - padrao do JavaScript
+// 0 = domingo ... 6 = sabado (padrao do JavaScript)
 export type DiaSemana = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-// Acoes da rotina de manutencao durante a maceracao
-//  - Agitar : homogeneizar / reincorporar o que decantou
-//  - Arejar : abrir o frasco para liberar volateis ("respiro")
+// Rotina durante a maceracao
 export type AcaoManutencao = 'Agitar' | 'Arejar';
 
 
 // ------------------------------------------------------------
-// 2. MATERIA-PRIMA (Ingredientes / insumos)
+// 2. MATERIA-PRIMA
 // ------------------------------------------------------------
-// Biblioteca central de insumos. Perfumes referenciam por ID.
 
 export interface IMateriaPrima {
-  id: string;                 // uuid
-  nome: string;               // "Ambroxan"
-  tipo: NotaPiramide;         // "Fundo"
-  unidade: UnidadeMedida;     // "g" ou "ml"
+  id: string;
+  nome: string;
+  tipo: NotaPiramide;
+  unidade: UnidadeMedida;
 
-  // Estoque
-  estoqueAtual: number;       // 180
-  estoqueMinimo: number;      // 50
+  estoqueAtual: number;
+  estoqueMinimo: number;
 
-  // Comercial (opcional - preparado para o futuro)
-  fornecedor?: string;        // "ABC Aromas"
-  custoPorUnidade?: number;   // custo por g/ml (R$)
+  fornecedor?: string;
+  custoPorUnidade?: number;   // R$ por g/ml
   loteFornecedor?: string;
-  validade?: string;          // ISO date
-  ultimaCompra?: string;      // ISO date
+  validade?: string;
+  ultimaCompra?: string;
 
   observacoes?: string;
-  ativo: boolean;             // permite "desativar" sem apagar
-  criadoEm: string;           // ISO date
-  atualizadoEm: string;       // ISO date
+  ativo: boolean;
+  criadoEm: string;
+  atualizadoEm: string;
 }
 
 
 // ------------------------------------------------------------
-// 3. PERFUME (a criacao / receita mae)
+// 3. PERFUME
 // ------------------------------------------------------------
 
 export interface IPerfume {
-  id: string;                 // uuid
-  codigo: string;             // "AG001"
-  nome: string;               // "Arabian Gold"
+  id: string;
+  codigo: string;
+  nome: string;
 
   categoria: Categoria;
   familia: FamiliaOlfativa;
   concentracao: Concentracao;
 
-  // Maceracao especifica deste perfume (dias).
-  // Se vazio, o sistema usa o padrao da concentracao.
-  maceracaoDias?: number;     // 45
+  maceracaoDias?: number;
 
   status: StatusPerfume;
   descricao?: string;
-  observacoes?: string;
-  fotoUrl?: string;           // base64 (LocalStorage) ou URL
-
-  criadoEm: string;
-  atualizadoEm: string;
-}
-
-
-// ------------------------------------------------------------
-// 4. FORMULA (composicao do perfume)
-// ------------------------------------------------------------
-// Uma formula pertence a UM perfume e tem VARIOS itens.
-// Trabalhamos com versao para guardar o historico de ajustes.
-
-export interface IFormulaItem {
-  materiaPrimaId: string;     // referencia a IMateriaPrima
-  percentual: number;         // % dentro do concentrado (ex: 15)
-  nota?: NotaPiramide;        // opcional, herda da materia-prima
-  ordem?: number;             // ordem de exibicao/mistura
-}
-
-export interface IFormula {
-  id: string;                 // uuid
-  perfumeId: string;          // referencia a IPerfume
-  versao: number;             // 1, 2, 3... (historico de ajustes)
-
-  itens: IFormulaItem[];
-
-  // Diluicao final
-  percentualConcentrado: number; // ex: 25 (%)
-  percentualAlcool: number;      // ex: 73 (%)
-  percentualAgua?: number;       // ex: 2  (%)
-
-  ativa: boolean;             // apenas 1 versao ativa por perfume
-  observacoes?: string;
-  criadoEm: string;
-  atualizadoEm: string;
-}
-
-
-// ------------------------------------------------------------
-// 5. LOTE (producao real)
-// ------------------------------------------------------------
-// Cada vez que voce PRODUZ, nasce um lote.
-// O status e a timeline sao CALCULADOS a partir das datas.
-
-export interface IMarcoMaceracao {
-  dias: number;               // 7, 15, 30, 45, 60, 90
-  data: string;               // ISO date (calculada)
-  atingido: boolean;          // calculado (data <= hoje)
-}
-
-export interface ILote {
-  id: string;                 // uuid
-  codigo: string;             // "AG-20260916-001"
-
-  perfumeId: string;          // referencia a IPerfume
-  formulaId: string;          // versao da formula usada (rastreabilidade)
-
-  volumeMl: number;           // 500
-  dataProducao: string;       // ISO date
-
-  // Datas de maceracao (calculadas na criacao, mas gravadas
-  // para garantir rastreabilidade mesmo se a formula mudar)
-  maceracaoDias: number;      // 45
-  dataPrevista: string;       // ISO date (producao + maceracaoDias)
-  marcos: IMarcoMaceracao[];  // [{7,...},{15,...},{30,...},{45,...}]
-
-  statusManual?: StatusLote;  // sobrescreve o calculado (ex: "Descartado")
   observacoes?: string;
   fotoUrl?: string;
 
@@ -189,91 +101,192 @@ export interface ILote {
 
 
 // ------------------------------------------------------------
-// 6. AVALIACAO OLFATIVA (historico de testes do lote)
+// 4. FORMULA
 // ------------------------------------------------------------
-// Um lote pode ter VARIAS avaliacoes ao longo do tempo.
 
-export interface IAvaliacao {
-  id: string;                 // uuid
-  loteId: string;             // referencia a ILote
-  data: string;               // ISO date da avaliacao
-  diaMaceracao: number;       // 7, 15, 30... (calculado)
+export interface IFormulaItem {
+  materiaPrimaId: string;
+  percentual: number;         // % dentro do concentrado
+  nota?: NotaPiramide;
+  ordem?: number;
+}
 
-  nota: number;               // 0.0 a 10.0
-  fixacao?: number;           // 0 a 10 (horas ou escala)
-  projecao?: number;          // 0 a 10
-  observacao?: string;        // "Alcool ainda perceptivel"
+export interface IFormula {
+  id: string;
+  perfumeId: string;
+  versao: number;
 
+  itens: IFormulaItem[];
+
+  percentualConcentrado: number;
+  percentualAlcool: number;
+  percentualAgua?: number;
+
+  ativa: boolean;
+  observacoes?: string;
   criadoEm: string;
-}
-
-
-// ------------------------------------------------------------
-// 6b. MANUTENCAO DO LOTE (rotina de agitar / arejar)
-// ------------------------------------------------------------
-// Diferente dos marcos (evento unico), a manutencao e RECORRENTE:
-// acontece nos dias da semana configurados, enquanto o lote
-// estiver macerando. Cada execucao vira um registro aqui.
-
-export interface IManutencao {
-  id: string;                 // uuid
-  loteId: string;             // referencia a ILote
-  data: string;               // ISO date da execucao
-  diaMaceracao: number;       // dia da maceracao em que foi feita
-  acoes: AcaoManutencao[];    // ['Agitar', 'Arejar']
-  observacao?: string;        // "alcool ainda muito presente"
-  criadoEm: string;
-}
-
-
-// ------------------------------------------------------------
-// 6c. CONFIGURACAO DA ROTINA DE MANUTENCAO
-// ------------------------------------------------------------
-
-export interface IRotinaConfig {
-  ativa: boolean;             // liga/desliga a rotina
-  diasSemana: DiaSemana[];    // ex: [2, 6] = terca e sabado
-  acoes: AcaoManutencao[];    // o que fazer nesses dias
-  // Regra fixa: a rotina PARA quando o lote conclui a maceracao.
-}
-
-
-// ------------------------------------------------------------
-// 7. USUARIO / CONFIGURACOES (login local + preferencias)
-// ------------------------------------------------------------
-
-export interface IConfig {
-  // Login local (uso pessoal - apenas para "esconder" os dados)
-  usuario: string;            // "Rodrigo"
-  senhaHash: string;          // hash simples, NAO texto puro
-
-  // Marca / identidade
-  nomeLab: string;            // "Sillage Lab"
-  subtitulo?: string;         // "Gestao de Formulas e Maceracao"
-  logoUrl?: string;           // base64
-
-  // Regras de negocio configuraveis
-  maceracaoPadrao: Record<Concentracao, number>; // dias por concentracao
-  marcosPadrao: number[];     // [7, 15, 30, 45, 60, 90]
-  rotina: IRotinaConfig;      // agitar / arejar durante a maceracao
-
-  // Preferencias
-  tema: 'dark' | 'light';
-  moeda: string;              // "BRL"
-
-  versaoApp: string;          // "1.0.0"
   atualizadoEm: string;
 }
 
 
 // ------------------------------------------------------------
-// 8. ESTRUTURA RAIZ (o que fica salvo no LocalStorage)
+// 4b. CALCULO DE PRODUCAO (nao e salvo - e derivado)
 // ------------------------------------------------------------
-// Uma unica chave no LocalStorage: "sillage_lab_db"
-// Facilita o Exportar/Importar backup em JSON.
+// Converte a formula (%) + volume (ml) em quantidades reais
+// para pesar na bancada.
+
+export interface IItemCalculado {
+  materiaPrimaId: string;
+  nome: string;
+  tipo?: NotaPiramide;
+  unidade: UnidadeMedida;
+
+  percentual: number;         // % dentro do concentrado
+  quantidade: number;         // quanto pesar/medir (g ou ml)
+  custo?: number;             // R$ desta quantidade
+
+  estoqueAtual: number;
+  suficiente: boolean;        // tem estoque para esta producao?
+}
+
+export interface ICalculoProducao {
+  volumeTotalMl: number;
+  volumeConcentradoMl: number;
+  volumeAlcoolMl: number;
+  volumeAguaMl: number;
+
+  itens: IItemCalculado[];
+
+  custoTotal: number;
+  custoPorMl: number;
+  temEstoqueCompleto: boolean;
+  faltantes: string[];        // nomes das materias sem estoque
+}
+
+
+// ------------------------------------------------------------
+// 5. LOTE
+// ------------------------------------------------------------
+
+export interface IMarcoMaceracao {
+  dias: number;
+  data: string;
+  atingido: boolean;
+}
+
+// O que foi realmente consumido nesta producao.
+// Gravado no lote para rastreabilidade (mesmo que a
+// formula ou os precos mudem depois).
+export interface IConsumoLote {
+  materiaPrimaId: string;
+  nome: string;
+  quantidade: number;
+  unidade: UnidadeMedida;
+  custo?: number;
+}
+
+export interface ILote {
+  id: string;
+  codigo: string;
+
+  perfumeId: string;
+  formulaId: string;
+
+  volumeMl: number;
+  dataProducao: string;
+
+  maceracaoDias: number;
+  dataPrevista: string;
+  marcos: IMarcoMaceracao[];
+
+  // Producao (v3)
+  consumo?: IConsumoLote[];   // materias consumidas
+  custoTotal?: number;        // R$ do lote
+  baixouEstoque?: boolean;    // se o estoque ja foi descontado
+
+  statusManual?: StatusLote;
+  observacoes?: string;
+  fotoUrl?: string;
+
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
+
+// ------------------------------------------------------------
+// 6. AVALIACAO OLFATIVA
+// ------------------------------------------------------------
+
+export interface IAvaliacao {
+  id: string;
+  loteId: string;
+  data: string;
+  diaMaceracao: number;
+
+  nota: number;
+  fixacao?: number;
+  projecao?: number;
+  observacao?: string;
+
+  criadoEm: string;
+}
+
+
+// ------------------------------------------------------------
+// 6b. MANUTENCAO (rotina de agitar / arejar)
+// ------------------------------------------------------------
+
+export interface IManutencao {
+  id: string;
+  loteId: string;
+  data: string;
+  diaMaceracao: number;
+  acoes: AcaoManutencao[];
+  observacao?: string;
+  criadoEm: string;
+}
+
+export interface IRotinaConfig {
+  ativa: boolean;
+  diasSemana: DiaSemana[];
+  acoes: AcaoManutencao[];
+  // A rotina sempre para quando o lote conclui a maceracao.
+}
+
+
+// ------------------------------------------------------------
+// 7. CONFIGURACOES
+// ------------------------------------------------------------
+
+export interface IConfig {
+  usuario: string;
+  senhaHash: string;          // legado (login agora e do Firebase)
+
+  nomeLab: string;
+  subtitulo?: string;
+  logoUrl?: string;
+
+  maceracaoPadrao: Record<Concentracao, number>;
+  marcosPadrao: number[];
+  rotina: IRotinaConfig;
+
+  // Producao (v3)
+  baixaEstoqueAutomatica: boolean; // descontar ao produzir?
+
+  tema: 'dark' | 'light';
+  moeda: string;
+
+  versaoApp: string;
+  atualizadoEm: string;
+}
+
+
+// ------------------------------------------------------------
+// 8. ESTRUTURA RAIZ (backup / exportacao)
+// ------------------------------------------------------------
 
 export interface ISillageDB {
-  schemaVersion: number;      // controle de migracao futura
+  schemaVersion: number;
   config: IConfig;
   materiasPrimas: IMateriaPrima[];
   perfumes: IPerfume[];
@@ -281,12 +294,12 @@ export interface ISillageDB {
   lotes: ILote[];
   avaliacoes: IAvaliacao[];
   manutencoes: IManutencao[];
-  exportadoEm?: string;       // preenchido no backup
+  exportadoEm?: string;
 }
 
 
 // ------------------------------------------------------------
-// 9. CONSTANTES PADRAO
+// 9. CONSTANTES
 // ------------------------------------------------------------
 
 export const MACERACAO_PADRAO: Record<Concentracao, number> = {
@@ -299,10 +312,9 @@ export const MACERACAO_PADRAO: Record<Concentracao, number> = {
 
 export const MARCOS_PADRAO: number[] = [7, 15, 30, 45, 60, 90];
 
-// Rotina padrao: agitar e arejar as tercas e sabados
 export const ROTINA_PADRAO: IRotinaConfig = {
   ativa: true,
-  diasSemana: [2, 6],          // 2 = terca, 6 = sabado
+  diasSemana: [2, 6],          // terca e sabado
   acoes: ['Agitar', 'Arejar'],
 };
 
@@ -327,4 +339,4 @@ export const DIAS_CURTOS: Record<DiaSemana, string> = {
 };
 
 export const STORAGE_KEY = 'sillage_lab_db';
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;

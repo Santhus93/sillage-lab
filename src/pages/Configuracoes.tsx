@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - CONFIGURACOES
 // Arquivo: src/pages/Configuracoes.tsx
-// Rotina + maceracao padrao + backup + migracao do LocalStorage
+// v3: opcao de baixa automatica de estoque
 // ============================================================
 
 import { useState, useRef } from 'react';
@@ -28,6 +28,7 @@ import UploadIcon from '@mui/icons-material/Upload';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import TuneIcon from '@mui/icons-material/Tune';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import Inventory2Icon from '@mui/icons-material/Inventory2';
 
 import { cores } from '../theme/theme';
 import type {
@@ -54,14 +55,12 @@ const ACOES: AcaoManutencao[] = ['Agitar', 'Arejar'];
 const CONCENTRACOES: Concentracao[] = ['Colonia', 'EDT', 'EDP', 'Parfum', 'Extrait'];
 
 export default function Configuracoes() {
-  const { dados: config, carregando } = useDados<IConfig | null>(
-    carregarConfig,
-    null
-  );
+  const { dados: config, carregando } = useDados<IConfig | null>(carregarConfig, null);
 
   const [rotina, setRotina] = useState<IRotinaConfig | null>(null);
   const [maceracao, setMaceracao] = useState<Record<Concentracao, number> | null>(null);
   const [marcos, setMarcos] = useState('');
+  const [baixaAuto, setBaixaAuto] = useState<boolean | null>(null);
   const [msg, setMsg] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -69,15 +68,14 @@ export default function Configuracoes() {
 
   if (carregando || !config) return <Carregando />;
 
-  // Inicializa o formulario na primeira renderizacao com dados
   const rotinaAtual = rotina ?? {
     ...config.rotina,
     diasSemana: [...config.rotina.diasSemana],
     acoes: [...config.rotina.acoes],
   };
-  const maceracaoAtual =
-    maceracao ?? { ...MACERACAO_PADRAO, ...config.maceracaoPadrao };
+  const maceracaoAtual = maceracao ?? { ...MACERACAO_PADRAO, ...config.maceracaoPadrao };
   const marcosAtual = marcos || config.marcosPadrao.join(', ');
+  const baixaAtual = baixaAuto ?? config.baixaEstoqueAutomatica ?? true;
 
   function alternarDia(d: DiaSemana) {
     setRotina({
@@ -111,6 +109,7 @@ export default function Configuracoes() {
         rotina: rotinaAtual,
         maceracaoPadrao: maceracaoAtual,
         marcosPadrao: listaMarcos.length ? listaMarcos : config!.marcosPadrao,
+        baixaEstoqueAutomatica: baixaAtual,
       });
       setMsg('Configuracoes salvas. ✅');
     } catch {
@@ -150,7 +149,6 @@ export default function Configuracoes() {
 
   return (
     <Box>
-      <Typography variant="h4" sx={{ mb: 0.5 }}>Configuracoes</Typography>
       <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 3 }}>
         Regras do seu laboratorio
       </Typography>
@@ -163,8 +161,8 @@ export default function Configuracoes() {
             <Typography variant="h6">Rotina de manutencao</Typography>
           </Box>
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-            Agitar (homogeneizar) e arejar (abrir para liberar volateis) os lotes
-            nos dias escolhidos. A rotina para sozinha quando a maceracao termina.
+            Agitar (homogeneizar) e arejar (abrir para liberar volateis) os lotes nos
+            dias escolhidos. A rotina para sozinha quando a maceracao termina.
           </Typography>
           <Divider sx={{ mb: 2 }} />
 
@@ -172,9 +170,7 @@ export default function Configuracoes() {
             control={
               <Switch
                 checked={rotinaAtual.ativa}
-                onChange={(e) =>
-                  setRotina({ ...rotinaAtual, ativa: e.target.checked })
-                }
+                onChange={(e) => setRotina({ ...rotinaAtual, ativa: e.target.checked })}
               />
             }
             label="Rotina ativa"
@@ -198,9 +194,7 @@ export default function Configuracoes() {
                     minWidth: 62,
                     bgcolor: on ? 'rgba(176,141,87,0.2)' : 'rgba(255,255,255,0.05)',
                     color: on ? cores.dourado : cores.cinzaMedio,
-                    border: on
-                      ? `1px solid ${cores.dourado}55`
-                      : '1px solid transparent',
+                    border: on ? `1px solid ${cores.dourado}55` : '1px solid transparent',
                   }}
                 />
               );
@@ -222,9 +216,7 @@ export default function Configuracoes() {
                   sx={{
                     cursor: 'pointer',
                     fontWeight: 600,
-                    bgcolor: on
-                      ? `${cores.prontoTeste}22`
-                      : 'rgba(255,255,255,0.05)',
+                    bgcolor: on ? `${cores.prontoTeste}22` : 'rgba(255,255,255,0.05)',
                     color: on ? cores.prontoTeste : cores.cinzaMedio,
                   }}
                 />
@@ -235,12 +227,40 @@ export default function Configuracoes() {
           {rotinaAtual.ativa && rotinaAtual.diasSemana.length > 0 && (
             <Alert severity="info" sx={{ mt: 2.5 }}>
               Os lotes em maceracao aparecerao para manutencao toda{' '}
-              <strong>
-                {rotinaAtual.diasSemana.map((d) => DIAS_CURTOS[d]).join(', ')}
-              </strong>
-              .
+              <strong>{rotinaAtual.diasSemana.map((d) => DIAS_CURTOS[d]).join(', ')}</strong>.
             </Alert>
           )}
+        </CardContent>
+      </Card>
+
+      {/* PRODUCAO */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+            <Inventory2Icon sx={{ color: cores.dourado }} />
+            <Typography variant="h6">Producao e estoque</Typography>
+          </Box>
+          <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
+            Ao produzir um lote, o sistema calcula as quantidades e pode descontar
+            automaticamente das materias-primas.
+          </Typography>
+          <Divider sx={{ mb: 2 }} />
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={baixaAtual}
+                onChange={(e) => setBaixaAuto(e.target.checked)}
+              />
+            }
+            label="Descontar do estoque ao produzir"
+          />
+          <Typography
+            variant="caption"
+            sx={{ display: 'block', color: cores.cinzaMedio, mt: 0.5 }}
+          >
+            Ao excluir um lote, o estoque consumido e devolvido automaticamente.
+          </Typography>
         </CardContent>
       </Card>
 
@@ -283,15 +303,8 @@ export default function Configuracoes() {
       </Card>
 
       {/* SALVAR */}
-      <Box
-        sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 3 }}
-      >
-        <Button
-          variant="contained"
-          size="large"
-          onClick={salvarTudo}
-          disabled={salvando}
-        >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 3 }}>
+        <Button variant="contained" size="large" onClick={salvarTudo} disabled={salvando}>
           {salvando ? 'Salvando...' : 'Salvar configuracoes'}
         </Button>
         {msg && (
@@ -312,8 +325,8 @@ export default function Configuracoes() {
             <Typography variant="h6">Trazer dados deste navegador</Typography>
           </Box>
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-            Se voce usou o Sillage Lab neste dispositivo antes da nuvem, envie
-            aqueles cadastros para a nuvem. Faca isso uma unica vez.
+            Se voce usou o Sillage Lab neste dispositivo antes da nuvem, envie aqueles
+            cadastros para a nuvem. Faca isso uma unica vez.
           </Typography>
           <Divider sx={{ mb: 2 }} />
           <Button variant="outlined" startIcon={<CloudUploadIcon />} onClick={migrar}>
@@ -327,8 +340,8 @@ export default function Configuracoes() {
         <CardContent>
           <Typography variant="h6" sx={{ mb: 1 }}>💾 Backup</Typography>
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-            Seus dados ja ficam seguros na nuvem, mas voce pode guardar uma copia
-            em arquivo quando quiser.
+            Seus dados ja ficam seguros na nuvem, mas voce pode guardar uma copia em
+            arquivo quando quiser.
           </Typography>
           <Divider sx={{ mb: 2 }} />
 
@@ -383,8 +396,8 @@ export default function Configuracoes() {
         <DialogTitle>Apagar todos os dados?</DialogTitle>
         <DialogContent>
           <Typography variant="body2">
-            Perfumes, formulas, lotes, avaliacoes, manutencoes e materias-primas
-            serao removidos da nuvem para todos os usuarios.
+            Perfumes, formulas, lotes, avaliacoes, manutencoes e materias-primas serao
+            removidos da nuvem para todos os usuarios.
           </Typography>
         </DialogContent>
         <DialogActions>

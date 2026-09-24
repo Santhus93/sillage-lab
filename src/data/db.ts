@@ -1,12 +1,7 @@
 // ============================================================
 // SILLAGE LAB - CAMADA DE DADOS (Firestore / nuvem)
 // Arquivo: src/data/db.ts
-//
-// Mesma API de antes, porem ASSINCRONA (async/await), porque
-// agora os dados vem da nuvem e sao compartilhados.
-//
-// Os calculos puros (status, marcos, dias) continuam
-// sincronos - eles nao dependem do banco.
+// v3: baixa de estoque e custo ao produzir
 // ============================================================
 
 import {
@@ -19,6 +14,7 @@ import {
   query,
   where,
   writeBatch,
+  increment,
 } from 'firebase/firestore';
 import { v4 as uuid } from 'uuid';
 
@@ -33,6 +29,7 @@ import type {
   IMateriaPrima,
   IManutencao,
   IMarcoMaceracao,
+  IConsumoLote,
   ISillageDB,
   StatusLote,
   AcaoManutencao,
@@ -47,20 +44,19 @@ import {
 } from '../models';
 
 // ------------------------------------------------------------
-// ATALHOS DE CAMINHO
+// ATALHOS
 // ------------------------------------------------------------
 const docLab = () => doc(fs, LAB_PATH);
 const col = (nome: string) => collection(fs, `${LAB_PATH}/${nome}`);
 const docEm = (nome: string, id: string) => doc(fs, `${LAB_PATH}/${nome}/${id}`);
 
-// Le todos os documentos de uma colecao
 async function lerTodos<T>(nome: string): Promise<T[]> {
   const snap = await getDocs(col(nome));
   return snap.docs.map((d) => d.data() as T);
 }
 
 // ------------------------------------------------------------
-// HELPERS DE DATA / MACERACAO (puros, sem banco)
+// HELPERS DE DATA (puros)
 // ------------------------------------------------------------
 function addDias(dataISO: string, dias: number): string {
   const d = new Date(dataISO);
@@ -110,7 +106,6 @@ export function diasDesdeProducao(dataProducao: string): number {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
-// Lote ainda esta macerando? (rotina para quando termina)
 export function loteEmMaceracao(lote: ILote): boolean {
   if (lote.statusManual === 'Descartado') return false;
   const hoje = soData(new Date());
@@ -125,15 +120,16 @@ export function loteEmMaceracao(lote: ILote): boolean {
 function configPadrao(): IConfig {
   return {
     usuario: 'Sillage',
-    senhaHash: '',                 // nao usado mais (login e do Firebase)
+    senhaHash: '',
     nomeLab: 'Sillage Lab',
     subtitulo: 'Gestao de Formulas e Maceracao',
     maceracaoPadrao: { ...MACERACAO_PADRAO },
     marcosPadrao: [...MARCOS_PADRAO],
     rotina: { ...ROTINA_PADRAO, diasSemana: [...ROTINA_PADRAO.diasSemana] },
+    baixaEstoqueAutomatica: true,
     tema: 'dark',
     moeda: 'BRL',
-    versaoApp: '2.0.0',
+    versaoApp: '3.0.0',
     atualizadoEm: new Date().toISOString(),
   };
 }
@@ -146,7 +142,6 @@ export async function carregarConfig(): Promise<IConfig> {
     return padrao;
   }
   const dados = snap.data() as { config?: IConfig };
-  // completa campos que possam faltar
   return { ...configPadrao(), ...(dados.config ?? {}) };
 }
 
@@ -198,15 +193,11 @@ export async function salvarPerfume(
 
 export async function excluirPerfume(id: string): Promise<void> {
   const batch = writeBatch(fs);
-
-  // apaga o perfume
   batch.delete(docEm('perfumes', id));
 
-  // formulas do perfume
   const formulas = await getDocs(query(col('formulas'), where('perfumeId', '==', id)));
   formulas.forEach((d) => batch.delete(d.ref));
 
-  // lotes do perfume (e seus dependentes)
   const lotes = await getDocs(query(col('lotes'), where('perfumeId', '==', id)));
   const idsLotes: string[] = [];
   lotes.forEach((d) => {
@@ -259,6 +250,18 @@ export async function excluirMateriaPrima(id: string): Promise<void> {
   await deleteDoc(docEm('materiasPrimas', id));
 }
 
+// Ajusta o estoque somando (positivo) ou subtraindo (negativo)
+export async function ajustarEstoque(
+  materiaPrimaId: string,
+  delta: number
+): Promise<void> {
+  await setDoc(
+    docEm('materiasPrimas', materiaPrimaId),
+    { estoqueAtual: increment(delta), atualizadoEm: new Date().toISOString() },
+    { merge: true }
+  );
+}
+
 // ------------------------------------------------------------
 // FORMULAS
 // ------------------------------------------------------------
@@ -267,6 +270,11 @@ export async function listarFormulasDoPerfume(
 ): Promise<IFormula[]> {
   const snap = await getDocs(query(col('formulas'), where('perfumeId', '==', perfumeId)));
   return snap.docs.map((d) => d.data() as IFormula);
+}
+
+export async function buscarFormula(id: string): Promise<IFormula | undefined> {
+  const snap = await getDoc(docEm('formulas', id));
+  return snap.exists() ? (snap.data() as IFormula) : undefined;
 }
 
 export async function formulaAtiva(
@@ -283,7 +291,6 @@ export async function salvarFormula(
   const existentes = await listarFormulasDoPerfume(f.perfumeId);
   const batch = writeBatch(fs);
 
-  // so uma versao ativa por perfume
   if (f.ativa) {
     existentes
       .filter((x) => x.ativa)
@@ -320,6 +327,7 @@ export async function listarLotes(): Promise<ILote[]> {
   return lista.sort((a, b) => b.dataProducao.localeCompare(a.dataProducao));
 }
 
+// Cria o lote e, se pedido, ja desconta o estoque das materias
 export async function criarLote(dados: {
   perfumeId: string;
   formulaId: string;
@@ -327,6 +335,9 @@ export async function criarLote(dados: {
   dataProducao: string;
   maceracaoDias: number;
   observacoes?: string;
+  consumo?: IConsumoLote[];
+  custoTotal?: number;
+  baixarEstoque?: boolean;
 }): Promise<ILote> {
   const agora = new Date().toISOString();
   const [config, lotes, perfumes] = await Promise.all([
@@ -342,6 +353,8 @@ export async function criarLote(dados: {
   const seq = lotes.filter((l) => l.codigo.includes(dia)).length + 1;
   const codigo = `${prefixo}-${dia}-${String(seq).padStart(3, '0')}`;
 
+  const baixar = dados.baixarEstoque ?? false;
+
   const novo: ILote = {
     id: uuid(),
     codigo,
@@ -352,12 +365,29 @@ export async function criarLote(dados: {
     maceracaoDias: dados.maceracaoDias,
     dataPrevista: addDias(dados.dataProducao, dados.maceracaoDias),
     marcos: gerarMarcos(dados.dataProducao, config.marcosPadrao),
+    consumo: dados.consumo ?? [],
+    custoTotal: dados.custoTotal ?? 0,
+    baixouEstoque: baixar,
     observacoes: dados.observacoes ?? '',
     criadoEm: agora,
     atualizadoEm: agora,
   };
 
-  await setDoc(docEm('lotes', novo.id), novo);
+  const batch = writeBatch(fs);
+  batch.set(docEm('lotes', novo.id), novo);
+
+  // Desconta o estoque das materias-primas consumidas
+  if (baixar && dados.consumo?.length) {
+    dados.consumo.forEach((c) => {
+      batch.set(
+        docEm('materiasPrimas', c.materiaPrimaId),
+        { estoqueAtual: increment(-c.quantidade), atualizadoEm: agora },
+        { merge: true }
+      );
+    });
+  }
+
+  await batch.commit();
   return novo;
 }
 
@@ -372,9 +402,23 @@ export async function atualizarLote(
   );
 }
 
+// Exclui o lote e, se o estoque tinha sido baixado, devolve
 export async function excluirLote(id: string): Promise<void> {
+  const snap = await getDoc(docEm('lotes', id));
+  const lote = snap.data() as ILote | undefined;
+
   const batch = writeBatch(fs);
   batch.delete(docEm('lotes', id));
+
+  if (lote?.baixouEstoque && lote.consumo?.length) {
+    lote.consumo.forEach((c) => {
+      batch.set(
+        docEm('materiasPrimas', c.materiaPrimaId),
+        { estoqueAtual: increment(c.quantidade) },
+        { merge: true }
+      );
+    });
+  }
 
   const avals = await getDocs(query(col('avaliacoes'), where('loteId', '==', id)));
   avals.forEach((d) => batch.delete(d.ref));
@@ -508,7 +552,6 @@ export async function baixarBackup(): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-// Importa um backup (usado tambem para migrar do LocalStorage)
 export async function importarBackup(jsonTexto: string): Promise<boolean> {
   try {
     const dados = JSON.parse(jsonTexto) as ISillageDB;
@@ -544,7 +587,6 @@ export async function importarBackup(jsonTexto: string): Promise<boolean> {
   }
 }
 
-// Migra os dados que estavam no LocalStorage desta maquina
 export async function migrarDoLocalStorage(): Promise<boolean> {
   const raw = localStorage.getItem('sillage_lab_db');
   if (!raw) return false;
@@ -553,7 +595,6 @@ export async function migrarDoLocalStorage(): Promise<boolean> {
   return ok;
 }
 
-// Apaga TODOS os dados do laboratorio na nuvem
 export async function resetarTudo(): Promise<void> {
   const colecoes = [
     'perfumes',
