@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MODELO DE DADOS
 // Arquivo: src/models/index.ts
-// v3: consumo de materia-prima e custo por lote
+// v4: campos de avaliacao (contratipo) na materia-prima
 // ============================================================
 
 
@@ -48,10 +48,19 @@ export type DiaSemana = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 // Rotina durante a maceracao
 export type AcaoManutencao = 'Agitar' | 'Arejar';
 
+// Avaliacao de essencia pronta / contratipo (nosso proprio teste,
+// nao de terceiros) - usado dentro da materia-prima
+export type StatusAvaliacao = 'Testando' | 'Aprovado' | 'Reprovado' | 'Macerando';
+
 
 // ------------------------------------------------------------
 // 2. MATERIA-PRIMA
 // ------------------------------------------------------------
+// Cobre tanto insumos "crus" (Ambroxan, Alcool...) quanto
+// essencias prontas / contratipos compradas de fornecedores
+// (Baccarat Rouge 540, Good Girl...). Nesse segundo caso, os
+// campos de avaliacao abaixo registram o teste do proprio
+// laboratorio Sillage antes de decidir usar em producao.
 
 export interface IMateriaPrima {
   id: string;
@@ -67,6 +76,14 @@ export interface IMateriaPrima {
   loteFornecedor?: string;
   validade?: string;
   ultimaCompra?: string;
+
+  // Avaliacao (opcional - essencias prontas / contratipos)
+  inspiracao?: string;        // perfume original que ela imita
+  genero?: Categoria;
+  statusAvaliacao?: StatusAvaliacao;
+  avaliadoPor?: string;
+  dataAvaliacao?: string;
+  feedbackAvaliacao?: string; // fixacao, projecao, observacoes
 
   observacoes?: string;
   ativo: boolean;
@@ -130,10 +147,8 @@ export interface IFormula {
 
 
 // ------------------------------------------------------------
-// 4b. CALCULO DE PRODUCAO (nao e salvo - e derivado)
+// 4b. CALCULO DE PRODUCAO (derivado, nao persistido)
 // ------------------------------------------------------------
-// Converte a formula (%) + volume (ml) em quantidades reais
-// para pesar na bancada.
 
 export interface IItemCalculado {
   materiaPrimaId: string;
@@ -141,12 +156,12 @@ export interface IItemCalculado {
   tipo?: NotaPiramide;
   unidade: UnidadeMedida;
 
-  percentual: number;         // % dentro do concentrado
-  quantidade: number;         // quanto pesar/medir (g ou ml)
-  custo?: number;             // R$ desta quantidade
+  percentual: number;
+  quantidade: number;
+  custo?: number;
 
   estoqueAtual: number;
-  suficiente: boolean;        // tem estoque para esta producao?
+  suficiente: boolean;
 }
 
 export interface ICalculoProducao {
@@ -160,7 +175,7 @@ export interface ICalculoProducao {
   custoTotal: number;
   custoPorMl: number;
   temEstoqueCompleto: boolean;
-  faltantes: string[];        // nomes das materias sem estoque
+  faltantes: string[];
 }
 
 
@@ -174,9 +189,6 @@ export interface IMarcoMaceracao {
   atingido: boolean;
 }
 
-// O que foi realmente consumido nesta producao.
-// Gravado no lote para rastreabilidade (mesmo que a
-// formula ou os precos mudem depois).
 export interface IConsumoLote {
   materiaPrimaId: string;
   nome: string;
@@ -199,10 +211,9 @@ export interface ILote {
   dataPrevista: string;
   marcos: IMarcoMaceracao[];
 
-  // Producao (v3)
-  consumo?: IConsumoLote[];   // materias consumidas
-  custoTotal?: number;        // R$ do lote
-  baixouEstoque?: boolean;    // se o estoque ja foi descontado
+  consumo?: IConsumoLote[];
+  custoTotal?: number;
+  baixouEstoque?: boolean;
 
   statusManual?: StatusLote;
   observacoes?: string;
@@ -214,7 +225,7 @@ export interface ILote {
 
 
 // ------------------------------------------------------------
-// 6. AVALIACAO OLFATIVA
+// 6. AVALIACAO OLFATIVA (do lote, ja macerando)
 // ------------------------------------------------------------
 
 export interface IAvaliacao {
@@ -250,7 +261,6 @@ export interface IRotinaConfig {
   ativa: boolean;
   diasSemana: DiaSemana[];
   acoes: AcaoManutencao[];
-  // A rotina sempre para quando o lote conclui a maceracao.
 }
 
 
@@ -260,7 +270,7 @@ export interface IRotinaConfig {
 
 export interface IConfig {
   usuario: string;
-  senhaHash: string;          // legado (login agora e do Firebase)
+  senhaHash: string;          // legado
 
   nomeLab: string;
   subtitulo?: string;
@@ -270,8 +280,7 @@ export interface IConfig {
   marcosPadrao: number[];
   rotina: IRotinaConfig;
 
-  // Producao (v3)
-  baixaEstoqueAutomatica: boolean; // descontar ao produzir?
+  baixaEstoqueAutomatica: boolean;
 
   tema: 'dark' | 'light';
   moeda: string;
@@ -339,4 +348,4 @@ export const DIAS_CURTOS: Record<DiaSemana, string> = {
 };
 
 export const STORAGE_KEY = 'sillage_lab_db';
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;

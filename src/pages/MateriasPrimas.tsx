@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MATERIAS-PRIMAS
 // Arquivo: src/pages/MateriasPrimas.tsx
-// Biblioteca de insumos (nuvem)
+// v4: secao de avaliacao (essencia pronta / contratipo)
 // ============================================================
 
 import { useState } from 'react';
@@ -26,6 +26,8 @@ import {
   TableRow,
   LinearProgress,
   InputAdornment,
+  Divider,
+  Tooltip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
@@ -33,9 +35,16 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SearchIcon from '@mui/icons-material/Search';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import RateReviewIcon from '@mui/icons-material/RateReview';
 
 import { cores } from '../theme/theme';
-import type { IMateriaPrima, NotaPiramide, UnidadeMedida } from '../models';
+import type {
+  IMateriaPrima,
+  NotaPiramide,
+  UnidadeMedida,
+  Categoria,
+  StatusAvaliacao,
+} from '../models';
 import {
   listarMateriasPrimas,
   salvarMateriaPrima,
@@ -46,6 +55,8 @@ import { Carregando, ErroTela, Vazio, Cabecalho } from '../components/Estados';
 
 const TIPOS: NotaPiramide[] = ['Saida', 'Corpo', 'Fundo', 'Fixador', 'Solvente'];
 const UNIDADES: UnidadeMedida[] = ['g', 'ml', 'un'];
+const GENEROS: Categoria[] = ['Masculino', 'Feminino', 'Unissex'];
+const STATUS_AVAL: StatusAvaliacao[] = ['Testando', 'Aprovado', 'Reprovado', 'Macerando'];
 
 function corTipo(tipo: NotaPiramide): string {
   switch (tipo) {
@@ -56,6 +67,21 @@ function corTipo(tipo: NotaPiramide): string {
     case 'Solvente': return cores.cinzaMedio;
     default: return cores.cinzaMedio;
   }
+}
+
+// Cor do status de avaliacao (nosso proprio teste, nao de terceiros)
+function corStatusAvaliacao(s: StatusAvaliacao): string {
+  switch (s) {
+    case 'Aprovado': return cores.prontoVenda;
+    case 'Reprovado': return cores.descartado;
+    case 'Macerando': return cores.macerando;
+    case 'Testando': return cores.prontoTeste;
+    default: return cores.cinzaMedio;
+  }
+}
+
+function hojeInput(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function materiaVazia(): Partial<IMateriaPrima> {
@@ -69,6 +95,12 @@ function materiaVazia(): Partial<IMateriaPrima> {
     custoPorUnidade: undefined,
     observacoes: '',
     ativo: true,
+    inspiracao: '',
+    genero: undefined,
+    statusAvaliacao: undefined,
+    avaliadoPor: '',
+    dataAvaliacao: '',
+    feedbackAvaliacao: '',
   };
 }
 
@@ -83,16 +115,21 @@ export default function MateriasPrimas() {
   const [erroForm, setErroForm] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [busca, setBusca] = useState('');
+  const [mostrarAvaliacao, setMostrarAvaliacao] = useState(false);
 
   function abrirNovo() {
     setForm(materiaVazia());
     setErroForm('');
+    setMostrarAvaliacao(false);
     setAberto(true);
   }
 
   function abrirEdicao(m: IMateriaPrima) {
     setForm({ ...m });
     setErroForm('');
+    setMostrarAvaliacao(
+      Boolean(m.inspiracao || m.statusAvaliacao || m.feedbackAvaliacao)
+    );
     setAberto(true);
   }
 
@@ -118,6 +155,13 @@ export default function MateriasPrimas() {
           : undefined,
         observacoes: form.observacoes ?? '',
         ativo: form.ativo ?? true,
+        // Avaliacao (so grava se a secao estiver preenchida)
+        inspiracao: mostrarAvaliacao ? (form.inspiracao ?? '') : '',
+        genero: mostrarAvaliacao ? form.genero : undefined,
+        statusAvaliacao: mostrarAvaliacao ? form.statusAvaliacao : undefined,
+        avaliadoPor: mostrarAvaliacao ? (form.avaliadoPor ?? '') : '',
+        dataAvaliacao: mostrarAvaliacao ? (form.dataAvaliacao ?? '') : '',
+        feedbackAvaliacao: mostrarAvaliacao ? (form.feedbackAvaliacao ?? '') : '',
       });
       setAberto(false);
       recarregar();
@@ -139,10 +183,21 @@ export default function MateriasPrimas() {
     }
   }
 
+  function ativarAvaliacao() {
+    setMostrarAvaliacao(true);
+    setForm((f) => ({
+      ...f,
+      dataAvaliacao: f.dataAvaliacao || hojeInput(),
+      statusAvaliacao: f.statusAvaliacao ?? 'Testando',
+    }));
+  }
+
   if (carregando) return <Carregando />;
 
-  const filtrada = lista.filter((m) =>
-    m.nome.toLowerCase().includes(busca.toLowerCase())
+  const filtrada = lista.filter(
+    (m) =>
+      m.nome.toLowerCase().includes(busca.toLowerCase()) ||
+      (m.inspiracao ?? '').toLowerCase().includes(busca.toLowerCase())
   );
   const emFalta = lista.filter((m) => m.estoqueAtual <= m.estoqueMinimo).length;
 
@@ -157,7 +212,7 @@ export default function MateriasPrimas() {
         acao={
           <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
             <TextField
-              placeholder="Buscar..."
+              placeholder="Buscar nome ou inspiracao..."
               size="small"
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
@@ -170,7 +225,7 @@ export default function MateriasPrimas() {
                   ),
                 },
               }}
-              sx={{ width: { xs: 160, sm: 220 } }}
+              sx={{ width: { xs: 190, sm: 260 } }}
             />
             <Button variant="contained" startIcon={<AddIcon />} onClick={abrirNovo}>
               Nova
@@ -197,7 +252,7 @@ export default function MateriasPrimas() {
                   <TableCell>Tipo</TableCell>
                   <TableCell align="right">Estoque</TableCell>
                   <TableCell align="right">Minimo</TableCell>
-                  <TableCell sx={{ width: 130 }}>Nivel</TableCell>
+                  <TableCell sx={{ width: 120 }}>Nivel</TableCell>
                   <TableCell>Fornecedor</TableCell>
                   <TableCell align="right">Custo</TableCell>
                   <TableCell align="right">Acoes</TableCell>
@@ -208,6 +263,7 @@ export default function MateriasPrimas() {
                   const baixo = m.estoqueAtual <= m.estoqueMinimo;
                   const base = Math.max(m.estoqueMinimo * 2, 1);
                   const pct = Math.min((m.estoqueAtual / base) * 100, 100);
+                  const temAvaliacao = Boolean(m.statusAvaliacao);
 
                   return (
                     <TableRow key={m.id} hover>
@@ -219,7 +275,29 @@ export default function MateriasPrimas() {
                               sx={{ color: cores.descartado }}
                             />
                           )}
-                          <Typography variant="body2">{m.nome}</Typography>
+                          <Box>
+                            <Typography variant="body2">{m.nome}</Typography>
+                            {(m.inspiracao || temAvaliacao) && (
+                              <Tooltip
+                                title={m.feedbackAvaliacao || 'Sem observacoes'}
+                                arrow
+                              >
+                                <Typography
+                                  variant="caption"
+                                  sx={{
+                                    color: temAvaliacao
+                                      ? corStatusAvaliacao(m.statusAvaliacao!)
+                                      : cores.cinzaMedio,
+                                    cursor: m.feedbackAvaliacao ? 'help' : 'default',
+                                  }}
+                                >
+                                  {m.inspiracao ? `insp. ${m.inspiracao}` : ''}
+                                  {m.inspiracao && temAvaliacao ? ' • ' : ''}
+                                  {temAvaliacao ? m.statusAvaliacao : ''}
+                                </Typography>
+                              </Tooltip>
+                            )}
+                          </Box>
                         </Box>
                       </TableCell>
                       <TableCell>
@@ -309,7 +387,7 @@ export default function MateriasPrimas() {
               onChange={(e) => setForm({ ...form, nome: e.target.value })}
               sx={{ flex: '2 1 240px' }}
               size="small"
-              placeholder="Ex: Ambroxan"
+              placeholder="Ex: Ambroxan, ou Good Girl (contratipo)"
             />
             <TextField
               select
@@ -365,6 +443,7 @@ export default function MateriasPrimas() {
               onChange={(e) => setForm({ ...form, fornecedor: e.target.value })}
               sx={{ flex: '2 1 200px' }}
               size="small"
+              placeholder="Ex: AZ Fragrancias, Big Essencias..."
             />
             <TextField
               label="Custo por unidade"
@@ -377,7 +456,9 @@ export default function MateriasPrimas() {
               size="small"
               slotProps={{
                 input: {
-                  startAdornment: <InputAdornment position="start">R$</InputAdornment>,
+                  startAdornment: (
+                    <InputAdornment position="start">R$</InputAdornment>
+                  ),
                 },
               }}
             />
@@ -390,6 +471,108 @@ export default function MateriasPrimas() {
               multiline
               rows={2}
             />
+
+            {/* ---------- SECAO: AVALIACAO (essencia pronta / contratipo) ---------- */}
+            <Box sx={{ flex: '1 1 100%' }}>
+              <Divider sx={{ my: 1 }} />
+              {!mostrarAvaliacao ? (
+                <Button
+                  size="small"
+                  startIcon={<RateReviewIcon />}
+                  onClick={ativarAvaliacao}
+                  sx={{ color: cores.dourado }}
+                >
+                  + Adicionar avaliacao (essencia pronta / contratipo)
+                </Button>
+              ) : (
+                <>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      mb: 1.5,
+                    }}
+                  >
+                    <RateReviewIcon fontSize="small" sx={{ color: cores.dourado }} />
+                    <Typography variant="subtitle2">
+                      Avaliacao (essencia pronta / contratipo)
+                    </Typography>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                    <TextField
+                      label="Inspiracao (perfume original)"
+                      value={form.inspiracao ?? ''}
+                      onChange={(e) => setForm({ ...form, inspiracao: e.target.value })}
+                      sx={{ flex: '2 1 220px' }}
+                      size="small"
+                      placeholder="Ex: Good Girl, Baccarat Rouge 540"
+                    />
+                    <TextField
+                      select
+                      label="Genero"
+                      value={form.genero ?? ''}
+                      onChange={(e) =>
+                        setForm({ ...form, genero: e.target.value as Categoria })
+                      }
+                      sx={{ flex: '1 1 140px' }}
+                      size="small"
+                    >
+                      {GENEROS.map((g) => (
+                        <MenuItem key={g} value={g}>{g}</MenuItem>
+                      ))}
+                    </TextField>
+                    <TextField
+                      select
+                      label="Status"
+                      value={form.statusAvaliacao ?? 'Testando'}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          statusAvaliacao: e.target.value as StatusAvaliacao,
+                        })
+                      }
+                      sx={{ flex: '1 1 150px' }}
+                      size="small"
+                    >
+                      {STATUS_AVAL.map((s) => (
+                        <MenuItem key={s} value={s}>{s}</MenuItem>
+                      ))}
+                    </TextField>
+                    <TextField
+                      label="Avaliado por"
+                      value={form.avaliadoPor ?? ''}
+                      onChange={(e) => setForm({ ...form, avaliadoPor: e.target.value })}
+                      sx={{ flex: '1 1 160px' }}
+                      size="small"
+                      placeholder="Rodrigo ou sua companheira"
+                    />
+                    <TextField
+                      label="Data da avaliacao"
+                      type="date"
+                      value={form.dataAvaliacao ?? hojeInput()}
+                      onChange={(e) => setForm({ ...form, dataAvaliacao: e.target.value })}
+                      sx={{ flex: '1 1 160px' }}
+                      size="small"
+                      slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                    <TextField
+                      label="Feedback (fixacao, projecao, observacoes)"
+                      value={form.feedbackAvaliacao ?? ''}
+                      onChange={(e) =>
+                        setForm({ ...form, feedbackAvaliacao: e.target.value })
+                      }
+                      sx={{ flex: '1 1 100%' }}
+                      size="small"
+                      multiline
+                      rows={2}
+                      placeholder="Ex: 25% volume, fixou 7h, projecao boa por 1h30, muito similar ao original"
+                    />
+                  </Box>
+                </>
+              )}
+            </Box>
 
             {erroForm && (
               <Typography
