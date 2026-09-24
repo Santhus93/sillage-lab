@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - CONFIGURACOES
 // Arquivo: src/pages/Configuracoes.tsx
-// Rotina de manutencao + maceracao padrao + backup/restore
+// Rotina + maceracao padrao + backup + migracao do LocalStorage
 // ============================================================
 
 import { useState, useRef } from 'react';
@@ -27,6 +27,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import TuneIcon from '@mui/icons-material/Tune';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 import { cores } from '../theme/theme';
 import type {
@@ -34,6 +35,7 @@ import type {
   AcaoManutencao,
   Concentracao,
   IRotinaConfig,
+  IConfig,
 } from '../models';
 import { DIAS_CURTOS, MACERACAO_PADRAO } from '../models';
 import {
@@ -41,83 +43,108 @@ import {
   salvarConfig,
   baixarBackup,
   importarBackup,
+  migrarDoLocalStorage,
   resetarTudo,
 } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando } from '../components/Estados';
 
 const DIAS: DiaSemana[] = [0, 1, 2, 3, 4, 5, 6];
 const ACOES: AcaoManutencao[] = ['Agitar', 'Arejar'];
-const CONCENTRACOES: Concentracao[] = [
-  'Colonia', 'EDT', 'EDP', 'Parfum', 'Extrait',
-];
+const CONCENTRACOES: Concentracao[] = ['Colonia', 'EDT', 'EDP', 'Parfum', 'Extrait'];
 
 export default function Configuracoes() {
-  const config = carregarConfig();
+  const { dados: config, carregando } = useDados<IConfig | null>(
+    carregarConfig,
+    null
+  );
 
-  const [rotina, setRotina] = useState<IRotinaConfig>({
-    ...config.rotina,
-    diasSemana: [...config.rotina.diasSemana],
-    acoes: [...config.rotina.acoes],
-  });
-  const [maceracao, setMaceracao] = useState<Record<Concentracao, number>>({
-    ...MACERACAO_PADRAO,
-    ...config.maceracaoPadrao,
-  });
-  const [marcos, setMarcos] = useState(config.marcosPadrao.join(', '));
+  const [rotina, setRotina] = useState<IRotinaConfig | null>(null);
+  const [maceracao, setMaceracao] = useState<Record<Concentracao, number> | null>(null);
+  const [marcos, setMarcos] = useState('');
   const [msg, setMsg] = useState('');
+  const [salvando, setSalvando] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const inputFile = useRef<HTMLInputElement>(null);
 
+  if (carregando || !config) return <Carregando />;
+
+  // Inicializa o formulario na primeira renderizacao com dados
+  const rotinaAtual = rotina ?? {
+    ...config.rotina,
+    diasSemana: [...config.rotina.diasSemana],
+    acoes: [...config.rotina.acoes],
+  };
+  const maceracaoAtual =
+    maceracao ?? { ...MACERACAO_PADRAO, ...config.maceracaoPadrao };
+  const marcosAtual = marcos || config.marcosPadrao.join(', ');
+
   function alternarDia(d: DiaSemana) {
-    setRotina((r) => ({
-      ...r,
-      diasSemana: r.diasSemana.includes(d)
-        ? r.diasSemana.filter((x) => x !== d)
-        : [...r.diasSemana, d].sort(),
-    }));
+    setRotina({
+      ...rotinaAtual,
+      diasSemana: rotinaAtual.diasSemana.includes(d)
+        ? rotinaAtual.diasSemana.filter((x) => x !== d)
+        : [...rotinaAtual.diasSemana, d].sort(),
+    });
   }
 
   function alternarAcao(a: AcaoManutencao) {
-    setRotina((r) => ({
-      ...r,
-      acoes: r.acoes.includes(a)
-        ? r.acoes.filter((x) => x !== a)
-        : [...r.acoes, a],
-    }));
-  }
-
-  function salvarTudo() {
-    const listaMarcos = marcos
-      .split(',')
-      .map((x) => Number(x.trim()))
-      .filter((x) => !isNaN(x) && x > 0)
-      .sort((a, b) => a - b);
-
-    salvarConfig({
-      rotina,
-      maceracaoPadrao: maceracao,
-      marcosPadrao: listaMarcos.length ? listaMarcos : config.marcosPadrao,
+    setRotina({
+      ...rotinaAtual,
+      acoes: rotinaAtual.acoes.includes(a)
+        ? rotinaAtual.acoes.filter((x) => x !== a)
+        : [...rotinaAtual.acoes, a],
     });
-    setMsg('Configuracoes salvas. ✅');
   }
 
-  function aoImportar(e: React.ChangeEvent<HTMLInputElement>) {
+  async function salvarTudo() {
+    setSalvando(true);
+    setMsg('');
+    try {
+      const listaMarcos = marcosAtual
+        .split(',')
+        .map((x) => Number(x.trim()))
+        .filter((x) => !isNaN(x) && x > 0)
+        .sort((a, b) => a - b);
+
+      await salvarConfig({
+        rotina: rotinaAtual,
+        maceracaoPadrao: maceracaoAtual,
+        marcosPadrao: listaMarcos.length ? listaMarcos : config!.marcosPadrao,
+      });
+      setMsg('Configuracoes salvas. ✅');
+    } catch {
+      setMsg('Nao foi possivel salvar. Verifique sua conexao.');
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function aoImportar(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const ok = importarBackup(String(reader.result));
-      setMsg(
-        ok
-          ? 'Backup importado! Recarregue a pagina para ver os dados. ✅'
-          : 'Arquivo invalido. Verifique se e um backup do Sillage Lab.'
-      );
-    };
-    reader.readAsText(file);
+    const texto = await file.text();
+    const ok = await importarBackup(texto);
+    setMsg(
+      ok
+        ? 'Backup importado! Recarregue a pagina para ver os dados. ✅'
+        : 'Arquivo invalido. Verifique se e um backup do Sillage Lab.'
+    );
     e.target.value = '';
   }
 
-  function resetar() {
-    resetarTudo();
+  async function migrar() {
+    setMsg('');
+    const ok = await migrarDoLocalStorage();
+    setMsg(
+      ok
+        ? 'Dados locais enviados para a nuvem! Recarregue a pagina. ✅'
+        : 'Nenhum dado local encontrado neste navegador.'
+    );
+  }
+
+  async function resetar() {
+    await resetarTudo();
     window.location.reload();
   }
 
@@ -128,7 +155,7 @@ export default function Configuracoes() {
         Regras do seu laboratorio
       </Typography>
 
-      {/* ---------------- ROTINA DE MANUTENCAO ---------------- */}
+      {/* ROTINA */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
@@ -139,13 +166,15 @@ export default function Configuracoes() {
             Agitar (homogeneizar) e arejar (abrir para liberar volateis) os lotes
             nos dias escolhidos. A rotina para sozinha quando a maceracao termina.
           </Typography>
-          <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+          <Divider sx={{ mb: 2 }} />
 
           <FormControlLabel
             control={
               <Switch
-                checked={rotina.ativa}
-                onChange={(e) => setRotina({ ...rotina, ativa: e.target.checked })}
+                checked={rotinaAtual.ativa}
+                onChange={(e) =>
+                  setRotina({ ...rotinaAtual, ativa: e.target.checked })
+                }
               />
             }
             label="Rotina ativa"
@@ -156,17 +185,17 @@ export default function Configuracoes() {
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {DIAS.map((d) => {
-              const on = rotina.diasSemana.includes(d);
+              const on = rotinaAtual.diasSemana.includes(d);
               return (
                 <Chip
                   key={d}
                   label={DIAS_CURTOS[d]}
                   onClick={() => alternarDia(d)}
-                  disabled={!rotina.ativa}
+                  disabled={!rotinaAtual.ativa}
                   sx={{
                     cursor: 'pointer',
                     fontWeight: 700,
-                    minWidth: 64,
+                    minWidth: 62,
                     bgcolor: on ? 'rgba(176,141,87,0.2)' : 'rgba(255,255,255,0.05)',
                     color: on ? cores.dourado : cores.cinzaMedio,
                     border: on
@@ -183,17 +212,19 @@ export default function Configuracoes() {
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             {ACOES.map((a) => {
-              const on = rotina.acoes.includes(a);
+              const on = rotinaAtual.acoes.includes(a);
               return (
                 <Chip
                   key={a}
                   label={a}
                   onClick={() => alternarAcao(a)}
-                  disabled={!rotina.ativa}
+                  disabled={!rotinaAtual.ativa}
                   sx={{
                     cursor: 'pointer',
                     fontWeight: 600,
-                    bgcolor: on ? `${cores.prontoTeste}22` : 'rgba(255,255,255,0.05)',
+                    bgcolor: on
+                      ? `${cores.prontoTeste}22`
+                      : 'rgba(255,255,255,0.05)',
                     color: on ? cores.prontoTeste : cores.cinzaMedio,
                   }}
                 />
@@ -201,11 +232,11 @@ export default function Configuracoes() {
             })}
           </Box>
 
-          {rotina.ativa && rotina.diasSemana.length > 0 && (
+          {rotinaAtual.ativa && rotinaAtual.diasSemana.length > 0 && (
             <Alert severity="info" sx={{ mt: 2.5 }}>
               Os lotes em maceracao aparecerao para manutencao toda{' '}
               <strong>
-                {rotina.diasSemana.map((d) => DIAS_CURTOS[d]).join(', ')}
+                {rotinaAtual.diasSemana.map((d) => DIAS_CURTOS[d]).join(', ')}
               </strong>
               .
             </Alert>
@@ -213,7 +244,7 @@ export default function Configuracoes() {
         </CardContent>
       </Card>
 
-      {/* ---------------- MACERACAO PADRAO ---------------- */}
+      {/* MACERACAO PADRAO */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
@@ -223,7 +254,7 @@ export default function Configuracoes() {
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
             Dias sugeridos ao cadastrar um perfume de cada concentracao.
           </Typography>
-          <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+          <Divider sx={{ mb: 2 }} />
 
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
             {CONCENTRACOES.map((c) => (
@@ -232,9 +263,9 @@ export default function Configuracoes() {
                 label={c}
                 type="number"
                 size="small"
-                value={maceracao[c]}
+                value={maceracaoAtual[c]}
                 onChange={(e) =>
-                  setMaceracao({ ...maceracao, [c]: Number(e.target.value) })
+                  setMaceracao({ ...maceracaoAtual, [c]: Number(e.target.value) })
                 }
                 sx={{ flex: '1 1 130px' }}
               />
@@ -242,7 +273,7 @@ export default function Configuracoes() {
             <TextField
               label="Marcos (dias, separados por virgula)"
               size="small"
-              value={marcos}
+              value={marcosAtual}
               onChange={(e) => setMarcos(e.target.value)}
               sx={{ flex: '1 1 100%' }}
               helperText="Ex: 7, 15, 30, 45, 60, 90"
@@ -251,10 +282,17 @@ export default function Configuracoes() {
         </CardContent>
       </Card>
 
-      {/* ---------------- SALVAR ---------------- */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 3 }}>
-        <Button variant="contained" size="large" onClick={salvarTudo}>
-          Salvar configuracoes
+      {/* SALVAR */}
+      <Box
+        sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 3 }}
+      >
+        <Button
+          variant="contained"
+          size="large"
+          onClick={salvarTudo}
+          disabled={salvando}
+        >
+          {salvando ? 'Salvando...' : 'Salvar configuracoes'}
         </Button>
         {msg && (
           <Alert
@@ -266,21 +304,39 @@ export default function Configuracoes() {
         )}
       </Box>
 
-      {/* ---------------- BACKUP ---------------- */}
+      {/* MIGRACAO */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1 }}>
+            <CloudUploadIcon sx={{ color: cores.dourado }} />
+            <Typography variant="h6">Trazer dados deste navegador</Typography>
+          </Box>
+          <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
+            Se voce usou o Sillage Lab neste dispositivo antes da nuvem, envie
+            aqueles cadastros para a nuvem. Faca isso uma unica vez.
+          </Typography>
+          <Divider sx={{ mb: 2 }} />
+          <Button variant="outlined" startIcon={<CloudUploadIcon />} onClick={migrar}>
+            Enviar dados locais para a nuvem
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* BACKUP */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 1 }}>💾 Backup</Typography>
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-            Seus dados ficam apenas neste navegador. Exporte de vez em quando —
-            e use o mesmo arquivo para levar tudo para outro computador.
+            Seus dados ja ficam seguros na nuvem, mas voce pode guardar uma copia
+            em arquivo quando quiser.
           </Typography>
-          <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+          <Divider sx={{ mb: 2 }} />
 
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
             <Button
               variant="outlined"
               startIcon={<DownloadIcon />}
-              onClick={baixarBackup}
+              onClick={() => baixarBackup()}
             >
               Exportar backup
             </Button>
@@ -302,15 +358,15 @@ export default function Configuracoes() {
         </CardContent>
       </Card>
 
-      {/* ---------------- ZONA PERIGOSA ---------------- */}
+      {/* ZONA PERIGOSA */}
       <Card sx={{ borderColor: `${cores.descartado}55` }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 1, color: cores.descartado }}>
             Zona perigosa
           </Typography>
           <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-            Apaga todos os dados e a senha deste navegador. Nao ha volta —
-            exporte um backup antes.
+            Apaga todos os dados do laboratorio na nuvem — para voce e para quem
+            compartilha o acesso. Nao ha volta; exporte um backup antes.
           </Typography>
           <Button
             variant="outlined"
@@ -327,8 +383,8 @@ export default function Configuracoes() {
         <DialogTitle>Apagar todos os dados?</DialogTitle>
         <DialogContent>
           <Typography variant="body2">
-            Perfumes, formulas, lotes, avaliacoes, manutencoes e a senha serao
-            removidos deste navegador.
+            Perfumes, formulas, lotes, avaliacoes, manutencoes e materias-primas
+            serao removidos da nuvem para todos os usuarios.
           </Typography>
         </DialogContent>
         <DialogActions>

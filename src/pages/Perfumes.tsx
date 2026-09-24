@@ -1,8 +1,7 @@
 // ============================================================
 // SILLAGE LAB - PERFUMES
 // Arquivo: src/pages/Perfumes.tsx
-// Lista + cadastro/edicao/exclusao de perfumes (modal)
-// (Sem Stack: usa Box + flexbox, compativel com MUI novo)
+// Lista + cadastro/edicao/exclusao (nuvem)
 // ============================================================
 
 import { useState } from 'react';
@@ -37,6 +36,8 @@ import type {
 } from '../models';
 import { MACERACAO_PADRAO } from '../models';
 import { listarPerfumes, salvarPerfume, excluirPerfume } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando, ErroTela, Vazio, Cabecalho } from '../components/Estados';
 
 const CATEGORIAS: Categoria[] = ['Masculino', 'Feminino', 'Unissex'];
 
@@ -51,7 +52,6 @@ const CONCENTRACOES: Concentracao[] = [
 
 const STATUS: StatusPerfume[] = ['Ativo', 'Em Desenvolvimento', 'Arquivado'];
 
-// Estado inicial de um formulario vazio
 function perfumeVazio(): Partial<IPerfume> {
   return {
     codigo: '',
@@ -66,7 +66,6 @@ function perfumeVazio(): Partial<IPerfume> {
   };
 }
 
-// Cor do chip de status
 function corStatus(status: StatusPerfume): string {
   switch (status) {
     case 'Ativo': return cores.prontoVenda;
@@ -77,128 +76,106 @@ function corStatus(status: StatusPerfume): string {
 }
 
 export default function Perfumes() {
-  const [lista, setLista] = useState<IPerfume[]>(listarPerfumes());
+  const { dados: lista, carregando, erro, recarregar } = useDados<IPerfume[]>(
+    listarPerfumes,
+    []
+  );
+
   const [aberto, setAberto] = useState(false);
   const [form, setForm] = useState<Partial<IPerfume>>(perfumeVazio());
-  const [erro, setErro] = useState('');
-
-  function recarregar() {
-    setLista(listarPerfumes());
-  }
+  const [erroForm, setErroForm] = useState('');
+  const [salvando, setSalvando] = useState(false);
 
   function abrirNovo() {
     setForm(perfumeVazio());
-    setErro('');
+    setErroForm('');
     setAberto(true);
   }
 
   function abrirEdicao(p: IPerfume) {
     setForm({ ...p });
-    setErro('');
+    setErroForm('');
     setAberto(true);
   }
 
-  function fechar() {
-    setAberto(false);
-  }
-
-  // Quando muda a concentracao, sugere a maceracao padrao
   function mudarConcentracao(c: Concentracao) {
-    setForm((f) => ({
-      ...f,
-      concentracao: c,
-      maceracaoDias: MACERACAO_PADRAO[c],
-    }));
+    setForm((f) => ({ ...f, concentracao: c, maceracaoDias: MACERACAO_PADRAO[c] }));
   }
 
-  function salvar() {
-    setErro('');
+  async function salvar() {
+    setErroForm('');
     if (!form.codigo?.trim() || !form.nome?.trim()) {
-      setErro('Preencha ao menos o codigo e o nome.');
+      setErroForm('Preencha ao menos o codigo e o nome.');
       return;
     }
 
-    salvarPerfume({
-      id: form.id,
-      codigo: form.codigo!.trim(),
-      nome: form.nome!.trim(),
-      categoria: form.categoria as Categoria,
-      familia: form.familia as FamiliaOlfativa,
-      concentracao: form.concentracao as Concentracao,
-      maceracaoDias: Number(form.maceracaoDias) || undefined,
-      status: form.status as StatusPerfume,
-      descricao: form.descricao,
-      observacoes: form.observacoes,
-    });
-
-    recarregar();
-    setAberto(false);
+    setSalvando(true);
+    try {
+      await salvarPerfume({
+        id: form.id,
+        codigo: form.codigo!.trim(),
+        nome: form.nome!.trim(),
+        categoria: form.categoria as Categoria,
+        familia: form.familia as FamiliaOlfativa,
+        concentracao: form.concentracao as Concentracao,
+        maceracaoDias: Number(form.maceracaoDias) || undefined,
+        status: form.status as StatusPerfume,
+        descricao: form.descricao ?? '',
+        observacoes: form.observacoes ?? '',
+      });
+      setAberto(false);
+      recarregar();
+    } catch {
+      setErroForm('Nao foi possivel salvar. Verifique sua conexao.');
+    } finally {
+      setSalvando(false);
+    }
   }
 
-  function remover(p: IPerfume) {
+  async function remover(p: IPerfume) {
     if (
       window.confirm(
         `Excluir o perfume "${p.nome}"?\nSuas formulas e lotes tambem serao removidos.`
       )
     ) {
-      excluirPerfume(p.id);
+      await excluirPerfume(p.id);
       recarregar();
     }
   }
 
+  if (carregando) return <Carregando />;
+
   return (
     <Box>
-      {/* Cabecalho */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 3,
-        }}
-      >
-        <Box>
-          <Typography variant="h4" sx={{ mb: 0.5 }}>
-            Perfumes
-          </Typography>
-          <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
-            {lista.length} perfume(s) cadastrado(s)
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={abrirNovo}>
-          Novo Perfume
-        </Button>
-      </Box>
+      <Cabecalho
+        titulo="Perfumes"
+        subtitulo={`${lista.length} perfume(s) cadastrado(s)`}
+        acao={
+          <Button variant="contained" startIcon={<AddIcon />} onClick={abrirNovo}>
+            Novo Perfume
+          </Button>
+        }
+      />
 
-      {/* Lista de perfumes */}
+      {erro && <ErroTela mensagem={erro} />}
+
       {lista.length === 0 ? (
-        <Card>
-          <CardContent sx={{ textAlign: 'center', py: 6 }}>
-            <SpaIcon sx={{ fontSize: 48, color: cores.cinzaMedio, mb: 1 }} />
-            <Typography variant="body1" sx={{ color: cores.cinzaClaro }}>
-              Nenhum perfume ainda.
-            </Typography>
-            <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-              Clique em "Novo Perfume" para comecar seu catalogo. 🌹
-            </Typography>
-          </CardContent>
-        </Card>
+        <Vazio
+          icone={<SpaIcon />}
+          titulo="Nenhum perfume ainda."
+          descricao='Clique em "Novo Perfume" para comecar seu catalogo. 🌹'
+        />
       ) : (
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 2,
-          }}
-        >
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
           {lista.map((p) => (
-            <Card key={p.id} sx={{ flex: '1 1 300px', maxWidth: 380 }}>
+            <Card key={p.id} sx={{ flex: '1 1 300px', maxWidth: { sm: 380 } }}>
               <CardContent>
                 <Box
                   sx={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'flex-start',
+                    gap: 1,
                   }}
                 >
                   <Box>
@@ -223,7 +200,7 @@ export default function Perfumes() {
                   />
                 </Box>
 
-                <Divider sx={{ my: 1.5, borderColor: 'rgba(176,141,87,0.12)' }} />
+                <Divider sx={{ my: 1.5 }} />
 
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.8 }}>
                   <Chip label={p.categoria} size="small" variant="outlined" />
@@ -262,11 +239,9 @@ export default function Perfumes() {
         </Box>
       )}
 
-      {/* Modal de cadastro/edicao */}
-      <Dialog open={aberto} onClose={fechar} maxWidth="sm" fullWidth>
-        <DialogTitle>
-          {form.id ? 'Editar Perfume' : 'Novo Perfume'}
-        </DialogTitle>
+      {/* Modal */}
+      <Dialog open={aberto} onClose={() => setAberto(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>{form.id ? 'Editar Perfume' : 'Novo Perfume'}</DialogTitle>
         <DialogContent dividers>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, pt: 1 }}>
             <TextField
@@ -366,19 +341,22 @@ export default function Perfumes() {
               rows={2}
             />
 
-            {erro && (
-              <Typography variant="body2" sx={{ color: cores.descartado, flex: '1 1 100%' }}>
-                {erro}
+            {erroForm && (
+              <Typography
+                variant="body2"
+                sx={{ color: cores.descartado, flex: '1 1 100%' }}
+              >
+                {erroForm}
               </Typography>
             )}
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={fechar} color="secondary">
+          <Button onClick={() => setAberto(false)} color="secondary">
             Cancelar
           </Button>
-          <Button onClick={salvar} variant="contained">
-            Salvar
+          <Button onClick={salvar} variant="contained" disabled={salvando}>
+            {salvando ? 'Salvando...' : 'Salvar'}
           </Button>
         </DialogActions>
       </Dialog>

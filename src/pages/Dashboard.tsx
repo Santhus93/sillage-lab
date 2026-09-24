@@ -1,10 +1,9 @@
 // ============================================================
 // SILLAGE LAB - DASHBOARD
 // Arquivo: src/pages/Dashboard.tsx
-// Cards de resumo + rotina do dia + proximos marcos
+// Cards de resumo + rotina do dia + proximos marcos (nuvem)
 // ============================================================
 
-import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import {
   Box,
@@ -30,13 +29,102 @@ import {
   listarPerfumes,
   listarLotes,
   listarMateriasPrimas,
+  listarManutencoes,
   calcularStatusLote,
+  loteEmMaceracao,
   ehDiaDeRotina,
-  lotesPendentesRotina,
+  mesmoDia,
 } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando, ErroTela } from '../components/Estados';
 
 interface DashboardProps {
   onNavegar?: (tela: string) => void;
+}
+
+interface Resumo {
+  totalPerfumes: number;
+  macerando: number;
+  prontoTeste: number;
+  prontoVenda: number;
+  materiasBaixas: number;
+  eventos: { codigo: string; dias: number; data: string; faltam: number }[];
+  pendentesRotina: number;
+  diaDeRotina: boolean;
+  temDados: boolean;
+}
+
+const RESUMO_VAZIO: Resumo = {
+  totalPerfumes: 0,
+  macerando: 0,
+  prontoTeste: 0,
+  prontoVenda: 0,
+  materiasBaixas: 0,
+  eventos: [],
+  pendentesRotina: 0,
+  diaDeRotina: false,
+  temDados: false,
+};
+
+async function montarResumo(): Promise<Resumo> {
+  const [perfumes, lotes, materias, manutencoes, diaDeRotina] = await Promise.all([
+    listarPerfumes(),
+    listarLotes(),
+    listarMateriasPrimas(),
+    listarManutencoes(),
+    ehDiaDeRotina(),
+  ]);
+
+  const macerando = lotes.filter((l) => calcularStatusLote(l) === 'Macerando').length;
+  const prontoTeste = lotes.filter(
+    (l) => calcularStatusLote(l) === 'Pronto para Teste'
+  ).length;
+  const prontoVenda = lotes.filter(
+    (l) => calcularStatusLote(l) === 'Pronto para Venda'
+  ).length;
+
+  const materiasBaixas = materias.filter(
+    (m) => m.estoqueAtual <= m.estoqueMinimo
+  ).length;
+
+  const hoje = new Date();
+  const eventos: Resumo['eventos'] = [];
+
+  lotes.forEach((l) => {
+    if (l.statusManual === 'Descartado') return;
+    l.marcos.forEach((m) => {
+      if (m.dias > l.maceracaoDias) return;
+      const dataMarco = new Date(m.data);
+      if (dataMarco >= hoje) {
+        const faltam = Math.ceil(
+          (dataMarco.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)
+        );
+        eventos.push({ codigo: l.codigo, dias: m.dias, data: m.data, faltam });
+      }
+    });
+  });
+
+  eventos.sort((a, b) => a.data.localeCompare(b.data));
+
+  const pendentesRotina = diaDeRotina
+    ? lotes.filter(
+        (l) =>
+          loteEmMaceracao(l) &&
+          !manutencoes.some((m) => m.loteId === l.id && mesmoDia(m.data, hoje))
+      ).length
+    : 0;
+
+  return {
+    totalPerfumes: perfumes.length,
+    macerando,
+    prontoTeste,
+    prontoVenda,
+    materiasBaixas,
+    eventos: eventos.slice(0, 6),
+    pendentesRotina,
+    diaDeRotina,
+    temDados: perfumes.length > 0 || lotes.length > 0,
+  };
 }
 
 function CardMetrica({
@@ -53,7 +141,7 @@ function CardMetrica({
   onClick?: () => void;
 }) {
   return (
-    <Card sx={{ flex: '1 1 180px', minWidth: 180 }}>
+    <Card sx={{ flex: '1 1 180px', minWidth: 160 }}>
       <CardActionArea onClick={onClick} disabled={!onClick}>
         <CardContent>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -87,63 +175,10 @@ function CardMetrica({
 }
 
 export default function Dashboard({ onNavegar }: DashboardProps) {
-  const diaDeRotina = ehDiaDeRotina();
-  const pendentesRotina = lotesPendentesRotina();
+  const { dados, carregando, erro } = useDados<Resumo>(montarResumo, RESUMO_VAZIO);
   const hojeNome = NOMES_DIAS[new Date().getDay() as DiaSemana];
 
-  const dados = useMemo(() => {
-    const perfumes = listarPerfumes();
-    const lotes = listarLotes();
-    const materias = listarMateriasPrimas();
-
-    const macerando = lotes.filter(
-      (l) => calcularStatusLote(l) === 'Macerando'
-    ).length;
-    const prontoTeste = lotes.filter(
-      (l) => calcularStatusLote(l) === 'Pronto para Teste'
-    ).length;
-    const prontoVenda = lotes.filter(
-      (l) => calcularStatusLote(l) === 'Pronto para Venda'
-    ).length;
-
-    const materiasBaixas = materias.filter(
-      (m) => m.estoqueAtual <= m.estoqueMinimo
-    ).length;
-
-    const hoje = new Date();
-    const eventos: {
-      codigo: string;
-      dias: number;
-      data: string;
-      faltam: number;
-    }[] = [];
-
-    lotes.forEach((l) => {
-      if (l.statusManual === 'Descartado') return;
-      l.marcos.forEach((m) => {
-        if (m.dias > l.maceracaoDias) return;
-        const dataMarco = new Date(m.data);
-        if (dataMarco >= hoje) {
-          const faltam = Math.ceil(
-            (dataMarco.getTime() - hoje.getTime()) / (1000 * 60 * 60 * 24)
-          );
-          eventos.push({ codigo: l.codigo, dias: m.dias, data: m.data, faltam });
-        }
-      });
-    });
-
-    eventos.sort((a, b) => a.data.localeCompare(b.data));
-
-    return {
-      totalPerfumes: perfumes.length,
-      macerando,
-      prontoTeste,
-      prontoVenda,
-      materiasBaixas,
-      eventos: eventos.slice(0, 6),
-      temDados: perfumes.length > 0 || lotes.length > 0,
-    };
-  }, []);
+  if (carregando) return <Carregando texto="Carregando seu laboratorio..." />;
 
   return (
     <Box>
@@ -152,8 +187,10 @@ export default function Dashboard({ onNavegar }: DashboardProps) {
         Visao geral do seu laboratorio
       </Typography>
 
+      {erro && <ErroTela mensagem={erro} />}
+
       {/* Rotina do dia */}
-      {diaDeRotina && pendentesRotina.length > 0 && (
+      {dados.diaDeRotina && dados.pendentesRotina > 0 && (
         <Card sx={{ mb: 3, borderColor: `${cores.dourado}66` }}>
           <CardContent>
             <Box
@@ -172,7 +209,7 @@ export default function Dashboard({ onNavegar }: DashboardProps) {
                     Hoje e {hojeNome} — dia de rotina
                   </Typography>
                   <Typography variant="caption" sx={{ color: cores.cinzaMedio }}>
-                    {pendentesRotina.length} lote(s) aguardando agitacao / arejamento
+                    {dados.pendentesRotina} lote(s) aguardando agitacao / arejamento
                   </Typography>
                 </Box>
               </Box>
@@ -188,7 +225,7 @@ export default function Dashboard({ onNavegar }: DashboardProps) {
         </Card>
       )}
 
-      {/* Cards de metrica */}
+      {/* Metricas */}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 4 }}>
         <CardMetrica
           titulo="Perfumes cadastrados"
@@ -220,7 +257,7 @@ export default function Dashboard({ onNavegar }: DashboardProps) {
         />
       </Box>
 
-      {/* Alerta de estoque baixo */}
+      {/* Estoque baixo */}
       {dados.materiasBaixas > 0 && (
         <Card sx={{ mb: 3, borderColor: `${cores.descartado}55` }}>
           <CardContent>
@@ -241,7 +278,7 @@ export default function Dashboard({ onNavegar }: DashboardProps) {
           <Typography variant="h6" sx={{ mb: 2 }}>
             📅 Proximos marcos de maceracao
           </Typography>
-          <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.15)' }} />
+          <Divider sx={{ mb: 2 }} />
 
           {dados.eventos.length === 0 ? (
             <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>

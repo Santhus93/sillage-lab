@@ -1,11 +1,10 @@
 // ============================================================
 // SILLAGE LAB - FORMULAS
 // Arquivo: src/pages/Formulas.tsx
-// Coracao do sistema: monta a composicao do perfume usando
-// as materias-primas cadastradas, com versionamento.
+// Composicao do perfume com versionamento (nuvem)
 // ============================================================
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -35,16 +34,22 @@ import HistoryIcon from '@mui/icons-material/History';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { cores } from '../theme/theme';
-import type { IFormulaItem, NotaPiramide } from '../models';
+import type {
+  IFormulaItem,
+  IFormula,
+  IPerfume,
+  IMateriaPrima,
+  NotaPiramide,
+} from '../models';
 import {
   listarPerfumes,
   listarMateriasPrimas,
   listarFormulasDoPerfume,
-  formulaAtiva,
   salvarFormula,
 } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando, Vazio } from '../components/Estados';
 
-// Cor por tipo (mesma logica da tela de Materias-Primas)
 function corTipo(tipo?: NotaPiramide): string {
   switch (tipo) {
     case 'Saida': return cores.prontoTeste;
@@ -56,55 +61,78 @@ function corTipo(tipo?: NotaPiramide): string {
   }
 }
 
+interface Base {
+  perfumes: IPerfume[];
+  materias: IMateriaPrima[];
+}
+
+async function carregarBase(): Promise<Base> {
+  const [perfumes, materias] = await Promise.all([
+    listarPerfumes(),
+    listarMateriasPrimas(),
+  ]);
+  return { perfumes, materias };
+}
+
 export default function Formulas() {
-  const perfumes = listarPerfumes();
-  const materias = listarMateriasPrimas();
+  const { dados: base, carregando } = useDados<Base>(carregarBase, {
+    perfumes: [],
+    materias: [],
+  });
 
-  // O concentrado e so o oleo puro: solventes (alcool, agua, DPG)
-  // entram depois, no card de Diluicao final.
-  const materiasConcentrado = materias.filter((m) => m.tipo !== 'Solvente');
-
-  const [perfumeId, setPerfumeId] = useState<string>('');
+  const [perfumeId, setPerfumeId] = useState('');
+  const [versoes, setVersoes] = useState<IFormula[]>([]);
   const [itens, setItens] = useState<IFormulaItem[]>([]);
-  const [concentrado, setConcentrado] = useState<number>(25);
-  const [alcool, setAlcool] = useState<number>(73);
-  const [agua, setAgua] = useState<number>(2);
+  const [concentrado, setConcentrado] = useState(25);
+  const [alcool, setAlcool] = useState(73);
+  const [agua, setAgua] = useState(2);
   const [observacoes, setObservacoes] = useState('');
   const [msg, setMsg] = useState('');
+  const [salvando, setSalvando] = useState(false);
 
-  // Campos para adicionar um novo item
   const [novaMateria, setNovaMateria] = useState('');
   const [novoPercentual, setNovoPercentual] = useState<number | ''>('');
 
-  const versoes = perfumeId ? listarFormulasDoPerfume(perfumeId) : [];
-  const ativa = perfumeId ? formulaAtiva(perfumeId) : undefined;
+  // Solventes entram na diluicao final, nao no concentrado
+  const materiasConcentrado = base.materias.filter((m) => m.tipo !== 'Solvente');
+  const ativa = versoes.find((v) => v.ativa);
 
-  // Carrega a formula ativa ao trocar de perfume
-  function trocarPerfume(id: string) {
-    setPerfumeId(id);
-    setMsg('');
-    const f = formulaAtiva(id);
-    if (f) {
-      setItens(f.itens);
-      setConcentrado(f.percentualConcentrado);
-      setAlcool(f.percentualAlcool);
-      setAgua(f.percentualAgua ?? 0);
-      setObservacoes(f.observacoes ?? '');
-    } else {
-      setItens([]);
-      setConcentrado(25);
-      setAlcool(73);
-      setAgua(2);
-      setObservacoes('');
+  // Carrega as versoes ao trocar de perfume
+  useEffect(() => {
+    if (!perfumeId) {
+      setVersoes([]);
+      return;
     }
-  }
+    let vivo = true;
+    listarFormulasDoPerfume(perfumeId).then((lista) => {
+      if (!vivo) return;
+      setVersoes(lista);
+      const f = lista.find((x) => x.ativa);
+      if (f) {
+        setItens(f.itens);
+        setConcentrado(f.percentualConcentrado);
+        setAlcool(f.percentualAlcool);
+        setAgua(f.percentualAgua ?? 0);
+        setObservacoes(f.observacoes ?? '');
+      } else {
+        setItens([]);
+        setConcentrado(25);
+        setAlcool(73);
+        setAgua(2);
+        setObservacoes('');
+      }
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [perfumeId]);
 
   function nomeMateria(id: string): string {
-    return materias.find((m) => m.id === id)?.nome ?? '(removida)';
+    return base.materias.find((m) => m.id === id)?.nome ?? '(removida)';
   }
 
   function tipoMateria(id: string): NotaPiramide | undefined {
-    return materias.find((m) => m.id === id)?.tipo;
+    return base.materias.find((m) => m.id === id)?.tipo;
   }
 
   function adicionarItem() {
@@ -127,19 +155,16 @@ export default function Formulas() {
     setNovoPercentual('');
   }
 
-  function removerItem(materiaPrimaId: string) {
-    setItens(itens.filter((i) => i.materiaPrimaId !== materiaPrimaId));
+  function removerItem(id: string) {
+    setItens(itens.filter((i) => i.materiaPrimaId !== id));
   }
 
-  function alterarPercentual(materiaPrimaId: string, valor: number) {
+  function alterarPercentual(id: string, valor: number) {
     setItens(
-      itens.map((i) =>
-        i.materiaPrimaId === materiaPrimaId ? { ...i, percentual: valor } : i
-      )
+      itens.map((i) => (i.materiaPrimaId === id ? { ...i, percentual: valor } : i))
     );
   }
 
-  // Totais
   const totais = useMemo(() => {
     const totalItens = itens.reduce((s, i) => s + (i.percentual || 0), 0);
     const totalDiluicao = concentrado + alcool + agua;
@@ -151,7 +176,7 @@ export default function Formulas() {
     };
   }, [itens, concentrado, alcool, agua]);
 
-  function salvar() {
+  async function salvar() {
     setMsg('');
     if (!perfumeId) {
       setMsg('Selecione um perfume.');
@@ -162,52 +187,49 @@ export default function Formulas() {
       return;
     }
 
-    const nova = salvarFormula({
-      perfumeId,
-      itens,
-      percentualConcentrado: concentrado,
-      percentualAlcool: alcool,
-      percentualAgua: agua,
-      ativa: true,
-      observacoes,
-    });
-
-    setMsg(`Formula salva como versao ${nova.versao}. ✅`);
+    setSalvando(true);
+    try {
+      const nova = await salvarFormula({
+        perfumeId,
+        itens,
+        percentualConcentrado: concentrado,
+        percentualAlcool: alcool,
+        percentualAgua: agua,
+        ativa: true,
+        observacoes,
+      });
+      setMsg(`Formula salva como versao ${nova.versao}. ✅`);
+      setVersoes(await listarFormulasDoPerfume(perfumeId));
+    } catch {
+      setMsg('Nao foi possivel salvar. Verifique sua conexao.');
+    } finally {
+      setSalvando(false);
+    }
   }
 
-  const perfumeSel = perfumes.find((p) => p.id === perfumeId);
+  if (carregando) return <Carregando />;
 
-  // Sem perfumes cadastrados
-  if (perfumes.length === 0) {
+  const perfumeSel = base.perfumes.find((p) => p.id === perfumeId);
+
+  if (base.perfumes.length === 0) {
     return (
       <Box>
-        <Typography variant="h4" sx={{ mb: 0.5 }}>
-          Formulas
-        </Typography>
+        <Typography variant="h4" sx={{ mb: 0.5 }}>Formulas</Typography>
         <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 3 }}>
           Composicao dos seus perfumes
         </Typography>
-        <Card>
-          <CardContent sx={{ textAlign: 'center', py: 6 }}>
-            <ScienceIcon sx={{ fontSize: 48, color: cores.cinzaMedio, mb: 1 }} />
-            <Typography variant="body1" sx={{ color: cores.cinzaClaro }}>
-              Cadastre um perfume primeiro.
-            </Typography>
-            <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
-              A formula sempre pertence a um perfume. 🌹
-            </Typography>
-          </CardContent>
-        </Card>
+        <Vazio
+          icone={<ScienceIcon />}
+          titulo="Cadastre um perfume primeiro."
+          descricao="A formula sempre pertence a um perfume. 🌹"
+        />
       </Box>
     );
   }
 
   return (
     <Box>
-      {/* Cabecalho */}
-      <Typography variant="h4" sx={{ mb: 0.5 }}>
-        Formulas
-      </Typography>
+      <Typography variant="h4" sx={{ mb: 0.5 }}>Formulas</Typography>
       <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 3 }}>
         Composicao dos seus perfumes
       </Typography>
@@ -216,22 +238,17 @@ export default function Formulas() {
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Box
-            sx={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 2,
-              alignItems: 'center',
-            }}
+            sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}
           >
             <TextField
               select
               label="Perfume"
               value={perfumeId}
-              onChange={(e) => trocarPerfume(e.target.value)}
+              onChange={(e) => setPerfumeId(e.target.value)}
               size="small"
               sx={{ flex: '1 1 280px' }}
             >
-              {perfumes.map((p) => (
+              {base.perfumes.map((p) => (
                 <MenuItem key={p.id} value={p.id}>
                   {p.codigo} — {p.nome}
                 </MenuItem>
@@ -250,9 +267,7 @@ export default function Formulas() {
               <Tooltip title={`${versoes.length} versao(oes) salva(s)`}>
                 <Chip
                   icon={<HistoryIcon />}
-                  label={
-                    ativa ? `Versao ativa: v${ativa.versao}` : 'Sem versao ativa'
-                  }
+                  label={ativa ? `Versao ativa: v${ativa.versao}` : 'Sem versao ativa'}
                   size="small"
                   sx={{
                     bgcolor: 'rgba(176,141,87,0.15)',
@@ -268,7 +283,7 @@ export default function Formulas() {
 
       {perfumeId && (
         <>
-          {/* Composicao do concentrado */}
+          {/* Concentrado */}
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Box
@@ -300,22 +315,19 @@ export default function Formulas() {
                 value={Math.min(totais.totalItens, 100)}
                 sx={{
                   height: 8,
-                  borderRadius: 4,
                   mb: 2,
-                  bgcolor: 'rgba(255,255,255,0.08)',
                   '& .MuiLinearProgress-bar': {
                     bgcolor: totais.itensOk ? cores.prontoVenda : cores.dourado,
                   },
                 }}
               />
 
-              {/* Adicionar item */}
               <Box
                 sx={{
                   display: 'flex',
                   flexWrap: 'wrap',
                   gap: 1.5,
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   mb: 2,
                 }}
               >
@@ -357,12 +369,12 @@ export default function Formulas() {
                   startIcon={<AddIcon />}
                   onClick={adicionarItem}
                   disabled={!novaMateria || !novoPercentual}
+                  sx={{ mt: 0.2 }}
                 >
                   Adicionar
                 </Button>
               </Box>
 
-              {/* Tabela de itens */}
               {itens.length === 0 ? (
                 <Typography variant="body2" sx={{ color: cores.cinzaMedio, py: 2 }}>
                   Nenhum ingrediente na formula ainda. Adicione acima. 👆
@@ -432,7 +444,7 @@ export default function Formulas() {
             </CardContent>
           </Card>
 
-          {/* Diluicao final */}
+          {/* Diluicao */}
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Box
@@ -453,15 +465,13 @@ export default function Formulas() {
                     bgcolor: totais.diluicaoOk
                       ? `${cores.prontoVenda}22`
                       : `${cores.descartado}22`,
-                    color: totais.diluicaoOk
-                      ? cores.prontoVenda
-                      : cores.descartado,
+                    color: totais.diluicaoOk ? cores.prontoVenda : cores.descartado,
                     fontWeight: 700,
                   }}
                 />
               </Box>
 
-              <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+              <Divider sx={{ mb: 2 }} />
 
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
                 <TextField
@@ -503,20 +513,20 @@ export default function Formulas() {
 
           {/* Acoes */}
           <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexWrap: 'wrap',
-            }}
+            sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}
           >
             <Button
               variant="contained"
               startIcon={<SaveIcon />}
               onClick={salvar}
               size="large"
+              disabled={salvando}
             >
-              {ativa ? `Salvar como versao ${ativa.versao + 1}` : 'Salvar formula'}
+              {salvando
+                ? 'Salvando...'
+                : ativa
+                ? `Salvar como versao ${ativa.versao + 1}`
+                : 'Salvar formula'}
             </Button>
 
             {!totais.itensOk && itens.length > 0 && (
@@ -535,14 +545,14 @@ export default function Formulas() {
             )}
           </Box>
 
-          {/* Historico de versoes */}
+          {/* Historico */}
           {versoes.length > 0 && (
             <Card sx={{ mt: 3 }}>
               <CardContent>
                 <Typography variant="h6" sx={{ mb: 2 }}>
                   📚 Historico de versoes
                 </Typography>
-                <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+                <Divider sx={{ mb: 2 }} />
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {versoes
                     .slice()

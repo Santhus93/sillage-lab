@@ -1,12 +1,12 @@
 // ============================================================
 // SILLAGE LAB - APP PRINCIPAL
 // Arquivo: src/App.tsx
-// Tema + Login + Menu RESPONSIVO + Navegacao
-// No celular o menu vira gaveta (botao ☰); no desktop fica fixo.
+// Login via Firebase + menu responsivo + navegacao
 // ============================================================
 
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
+import type { User } from 'firebase/auth';
 import {
   ThemeProvider,
   CssBaseline,
@@ -28,6 +28,8 @@ import {
   Badge,
   useMediaQuery,
   Tooltip,
+  CircularProgress,
+  Link,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -39,10 +41,20 @@ import EventIcon from '@mui/icons-material/Event';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
+import CloudDoneIcon from '@mui/icons-material/CloudDone';
 
 import theme, { cores } from './theme/theme';
 import Marca from './components/Marca';
-import { carregarConfig, salvarConfig, lotesPendentesRotina } from './data/db';
+import {
+  entrar as fazerLogin,
+  sair as fazerLogout,
+  observarLogin,
+  nomeExibicao,
+  recuperarSenha,
+  traduzirErro,
+} from './data/auth';
+import { ehDiaDeRotina, listarLotes, listarManutencoes, loteEmMaceracao, mesmoDia } from './data/db';
+
 import Dashboard from './pages/Dashboard';
 import Perfumes from './pages/Perfumes';
 import Formulas from './pages/Formulas';
@@ -82,17 +94,6 @@ const TITULOS: Record<Tela, string> = {
   config: 'Configuracoes',
 };
 
-// Hash simples (NAO e seguranca de banco, so evita senha em texto puro)
-function hashSimples(txt: string): string {
-  let h = 0;
-  for (let i = 0; i < txt.length; i++) {
-    h = (h << 5) - h + txt.charCodeAt(i);
-    h |= 0;
-  }
-  return String(h);
-}
-
-// Saudacao pelo horario - detalhe humano
 function saudacao(): string {
   const h = new Date().getHours();
   if (h < 5) return 'Boa madrugada';
@@ -104,37 +105,46 @@ function saudacao(): string {
 // ------------------------------------------------------------
 // TELA DE LOGIN
 // ------------------------------------------------------------
-function Login({ onEntrar }: { onEntrar: () => void }) {
-  const config = carregarConfig();
-  const primeiroAcesso = !config.senhaHash;
-
-  const [usuario, setUsuario] = useState(config.usuario || 'Rodrigo');
+function Login() {
+  const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
-  const [senha2, setSenha2] = useState('');
   const [erro, setErro] = useState('');
+  const [aviso, setAviso] = useState('');
+  const [enviando, setEnviando] = useState(false);
 
-  function entrar() {
+  async function entrar() {
     setErro('');
-
-    if (primeiroAcesso) {
-      if (senha.length < 4) {
-        setErro('A senha precisa ter ao menos 4 caracteres.');
-        return;
-      }
-      if (senha !== senha2) {
-        setErro('As senhas nao coincidem.');
-        return;
-      }
-      salvarConfig({ usuario, senhaHash: hashSimples(senha) });
-      onEntrar();
+    setAviso('');
+    if (!email || !senha) {
+      setErro('Informe e-mail e senha.');
       return;
     }
+    setEnviando(true);
+    try {
+      await fazerLogin(email, senha);
+      // o observador no App cuida da troca de tela
+    } catch (e) {
+      const codigo = (e as { code?: string }).code ?? '';
+      setErro(traduzirErro(codigo));
+    } finally {
+      setEnviando(false);
+    }
+  }
 
-    if (hashSimples(senha) !== config.senhaHash) {
-      setErro('Senha incorreta.');
+  async function esqueci() {
+    setErro('');
+    setAviso('');
+    if (!email) {
+      setErro('Digite seu e-mail para receber o link.');
       return;
     }
-    onEntrar();
+    try {
+      await recuperarSenha(email);
+      setAviso('Link de redefinicao enviado para seu e-mail.');
+    } catch (e) {
+      const codigo = (e as { code?: string }).code ?? '';
+      setErro(traduzirErro(codigo));
+    }
   }
 
   return (
@@ -172,21 +182,21 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
         <Divider sx={{ my: 3 }} />
 
         <Typography variant="body2" sx={{ color: cores.cinzaClaro, mb: 3 }}>
-          {primeiroAcesso
-            ? 'Primeiro acesso — defina sua senha'
-            : `${saudacao()}, ${config.usuario}`}
+          {saudacao()}
         </Typography>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {primeiroAcesso && (
-            <TextField
-              label="Usuario"
-              value={usuario}
-              onChange={(e) => setUsuario(e.target.value)}
-              fullWidth
-              size="small"
-            />
-          )}
+          <TextField
+            label="E-mail"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            fullWidth
+            size="small"
+            autoFocus
+            autoComplete="username"
+            onKeyDown={(e) => e.key === 'Enter' && entrar()}
+          />
           <TextField
             label="Senha"
             type="password"
@@ -194,33 +204,38 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
             onChange={(e) => setSenha(e.target.value)}
             fullWidth
             size="small"
-            autoFocus
+            autoComplete="current-password"
             onKeyDown={(e) => e.key === 'Enter' && entrar()}
           />
-          {primeiroAcesso && (
-            <TextField
-              label="Confirmar senha"
-              type="password"
-              value={senha2}
-              onChange={(e) => setSenha2(e.target.value)}
-              fullWidth
-              size="small"
-              onKeyDown={(e) => e.key === 'Enter' && entrar()}
-            />
-          )}
 
           {erro && <Alert severity="error">{erro}</Alert>}
+          {aviso && <Alert severity="success">{aviso}</Alert>}
 
-          <Button variant="contained" size="large" onClick={entrar}>
-            {primeiroAcesso ? 'Criar acesso' : 'Entrar'}
+          <Button
+            variant="contained"
+            size="large"
+            onClick={entrar}
+            disabled={enviando}
+          >
+            {enviando ? 'Entrando...' : 'Entrar'}
           </Button>
+
+          <Link
+            component="button"
+            type="button"
+            onClick={esqueci}
+            underline="hover"
+            sx={{ color: cores.cinzaMedio, fontSize: '0.8rem' }}
+          >
+            Esqueci minha senha
+          </Link>
         </Box>
 
         <Typography
           variant="caption"
           sx={{ display: 'block', mt: 3, color: alpha(cores.cinzaMedio, 0.7) }}
         >
-          Seus dados ficam apenas neste dispositivo.
+          Dados sincronizados na nuvem.
         </Typography>
       </Paper>
     </Box>
@@ -228,7 +243,7 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
 }
 
 // ------------------------------------------------------------
-// CONTEUDO DO MENU (compartilhado entre desktop e celular)
+// CONTEUDO DO MENU
 // ------------------------------------------------------------
 function ConteudoMenu({
   tela,
@@ -262,7 +277,6 @@ function ConteudoMenu({
                 '&.Mui-selected': {
                   bgcolor: alpha(cores.dourado, 0.14),
                   '&:hover': { bgcolor: alpha(cores.dourado, 0.2) },
-                  // marcador dourado na lateral
                   '&::before': {
                     content: '""',
                     position: 'absolute',
@@ -321,16 +335,20 @@ function ConteudoMenu({
       </List>
 
       <Box sx={{ flexGrow: 1 }} />
-      <Typography
-        variant="caption"
-        sx={{
-          p: 2.5,
-          color: alpha(cores.cinzaMedio, 0.6),
-          letterSpacing: '0.1em',
-        }}
-      >
-        Sillage Perfumaria
-      </Typography>
+      <Box sx={{ p: 2.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5 }}>
+          <CloudDoneIcon sx={{ fontSize: 15, color: alpha(cores.prontoVenda, 0.8) }} />
+          <Typography variant="caption" sx={{ color: alpha(cores.cinzaMedio, 0.8) }}>
+            Sincronizado
+          </Typography>
+        </Box>
+        <Typography
+          variant="caption"
+          sx={{ color: alpha(cores.cinzaMedio, 0.55), letterSpacing: '0.1em' }}
+        >
+          Sillage Perfumaria
+        </Typography>
+      </Box>
     </>
   );
 }
@@ -338,19 +356,48 @@ function ConteudoMenu({
 // ------------------------------------------------------------
 // LAYOUT PRINCIPAL
 // ------------------------------------------------------------
-function Layout({ onSair }: { onSair: () => void }) {
+function Layout({ user }: { user: User }) {
   const [tela, setTela] = useState<Tela>('dashboard');
   const [gaveta, setGaveta] = useState(false);
-  const config = carregarConfig();
+  const [pendentes, setPendentes] = useState(0);
 
-  // < 900px = celular/tablet -> menu vira gaveta
   const celular = useMediaQuery(theme.breakpoints.down('md'));
+  const nome = nomeExibicao(user);
 
-  const pendentes = lotesPendentesRotina().length;
+  // Conta os lotes que aguardam a rotina de hoje
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const diaRotina = await ehDiaDeRotina();
+        if (!diaRotina) {
+          if (ativo) setPendentes(0);
+          return;
+        }
+        const [lotes, manutencoes] = await Promise.all([
+          listarLotes(),
+          listarManutencoes(),
+        ]);
+        const qtd = lotes.filter(
+          (l) =>
+            loteEmMaceracao(l) &&
+            !manutencoes.some(
+              (m) => m.loteId === l.id && mesmoDia(m.data, new Date())
+            )
+        ).length;
+        if (ativo) setPendentes(qtd);
+      } catch {
+        if (ativo) setPendentes(0);
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [tela]);
 
   function escolher(t: Tela) {
     setTela(t);
-    setGaveta(false); // fecha a gaveta ao navegar no celular
+    setGaveta(false);
   }
 
   function renderTela() {
@@ -376,13 +423,11 @@ function Layout({ onSair }: { onSair: () => void }) {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      {/* ---------- BARRA SUPERIOR ---------- */}
       <AppBar
         position="fixed"
         elevation={0}
         sx={{
           zIndex: (t) => t.zIndex.drawer + 1,
-          // no desktop a barra comeca depois do menu
           width: { md: `calc(100% - ${LARGURA_MENU}px)` },
           ml: { md: `${LARGURA_MENU}px` },
         }}
@@ -408,10 +453,7 @@ function Layout({ onSair }: { onSair: () => void }) {
           {celular ? (
             <Marca tamanho="pequeno" comSimbolo={false} />
           ) : (
-            <Typography
-              variant="h5"
-              sx={{ flexGrow: 1, color: cores.branco }}
-            >
+            <Typography variant="h5" sx={{ color: cores.branco }}>
               {TITULOS[tela]}
             </Typography>
           )}
@@ -426,17 +468,17 @@ function Layout({ onSair }: { onSair: () => void }) {
               display: { xs: 'none', sm: 'block' },
             }}
           >
-            {config.usuario}
+            {nome}
           </Typography>
           <Tooltip title="Sair">
-            <IconButton color="inherit" onClick={onSair} size="small">
+            <IconButton color="inherit" onClick={() => fazerLogout()} size="small">
               <LogoutIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         </Toolbar>
       </AppBar>
 
-      {/* ---------- MENU CELULAR (gaveta temporaria) ---------- */}
+      {/* Menu celular */}
       <Drawer
         variant="temporary"
         open={gaveta}
@@ -454,7 +496,7 @@ function Layout({ onSair }: { onSair: () => void }) {
         <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />
       </Drawer>
 
-      {/* ---------- MENU DESKTOP (fixo) ---------- */}
+      {/* Menu desktop */}
       <Drawer
         variant="permanent"
         sx={{
@@ -472,7 +514,6 @@ function Layout({ onSair }: { onSair: () => void }) {
         <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />
       </Drawer>
 
-      {/* ---------- CONTEUDO ---------- */}
       <Box
         component="main"
         sx={{
@@ -483,7 +524,6 @@ function Layout({ onSair }: { onSair: () => void }) {
         }}
       >
         <Toolbar />
-        {/* key faz a animacao rodar a cada troca de tela */}
         <Box key={tela} className="sillage-fade">
           {renderTela()}
         </Box>
@@ -496,28 +536,39 @@ function Layout({ onSair }: { onSair: () => void }) {
 // APP
 // ------------------------------------------------------------
 export default function App() {
-  const [logado, setLogado] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [verificando, setVerificando] = useState(true);
 
   useEffect(() => {
-    if (sessionStorage.getItem('sillage_logado') === '1') {
-      setLogado(true);
-    }
+    const cancelar = observarLogin((u) => {
+      setUser(u);
+      setVerificando(false);
+    });
+    return cancelar;
   }, []);
-
-  function entrar() {
-    sessionStorage.setItem('sillage_logado', '1');
-    setLogado(true);
-  }
-
-  function sair() {
-    sessionStorage.removeItem('sillage_logado');
-    setLogado(false);
-  }
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      {logado ? <Layout onSair={sair} /> : <Login onEntrar={entrar} />}
+      {verificando ? (
+        <Box
+          sx={{
+            minHeight: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 3,
+          }}
+        >
+          <Marca tamanho="grande" />
+          <CircularProgress size={26} sx={{ color: cores.dourado }} />
+        </Box>
+      ) : user ? (
+        <Layout user={user} />
+      ) : (
+        <Login />
+      )}
     </ThemeProvider>
   );
 }

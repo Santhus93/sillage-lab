@@ -1,8 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MATERIAS-PRIMAS
 // Arquivo: src/pages/MateriasPrimas.tsx
-// Biblioteca de insumos: essencias, fixadores, solventes.
-// E a base das Formulas (cada item da formula aponta pra ca).
+// Biblioteca de insumos (nuvem)
 // ============================================================
 
 import { useState } from 'react';
@@ -10,7 +9,6 @@ import {
   Box,
   Typography,
   Card,
-  CardContent,
   Button,
   Dialog,
   DialogTitle,
@@ -41,21 +39,21 @@ import type { IMateriaPrima, NotaPiramide, UnidadeMedida } from '../models';
 import {
   listarMateriasPrimas,
   salvarMateriaPrima,
-  carregarDB,
-  salvarDB,
+  excluirMateriaPrima,
 } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando, ErroTela, Vazio, Cabecalho } from '../components/Estados';
 
 const TIPOS: NotaPiramide[] = ['Saida', 'Corpo', 'Fundo', 'Fixador', 'Solvente'];
 const UNIDADES: UnidadeMedida[] = ['g', 'ml', 'un'];
 
-// Cor por tipo (piramide olfativa)
 function corTipo(tipo: NotaPiramide): string {
   switch (tipo) {
-    case 'Saida': return cores.prontoTeste;   // azul (volatil)
-    case 'Corpo': return cores.dourado;       // dourado (coracao)
-    case 'Fundo': return cores.prontoVenda;   // verde (base)
-    case 'Fixador': return cores.macerando;   // amarelo
-    case 'Solvente': return cores.cinzaMedio; // cinza
+    case 'Saida': return cores.prontoTeste;
+    case 'Corpo': return cores.dourado;
+    case 'Fundo': return cores.prontoVenda;
+    case 'Fixador': return cores.macerando;
+    case 'Solvente': return cores.cinzaMedio;
     default: return cores.cinzaMedio;
   }
 }
@@ -75,139 +73,120 @@ function materiaVazia(): Partial<IMateriaPrima> {
 }
 
 export default function MateriasPrimas() {
-  const [lista, setLista] = useState<IMateriaPrima[]>(listarMateriasPrimas());
+  const { dados: lista, carregando, erro, recarregar } = useDados<IMateriaPrima[]>(
+    listarMateriasPrimas,
+    []
+  );
+
   const [aberto, setAberto] = useState(false);
   const [form, setForm] = useState<Partial<IMateriaPrima>>(materiaVazia());
-  const [erro, setErro] = useState('');
+  const [erroForm, setErroForm] = useState('');
+  const [salvando, setSalvando] = useState(false);
   const [busca, setBusca] = useState('');
-
-  function recarregar() {
-    setLista(listarMateriasPrimas());
-  }
 
   function abrirNovo() {
     setForm(materiaVazia());
-    setErro('');
+    setErroForm('');
     setAberto(true);
   }
 
   function abrirEdicao(m: IMateriaPrima) {
     setForm({ ...m });
-    setErro('');
+    setErroForm('');
     setAberto(true);
   }
 
-  function salvar() {
-    setErro('');
+  async function salvar() {
+    setErroForm('');
     if (!form.nome?.trim()) {
-      setErro('Informe o nome da materia-prima.');
+      setErroForm('Informe o nome da materia-prima.');
       return;
     }
 
-    salvarMateriaPrima({
-      id: form.id,
-      nome: form.nome!.trim(),
-      tipo: form.tipo as NotaPiramide,
-      unidade: form.unidade as UnidadeMedida,
-      estoqueAtual: Number(form.estoqueAtual) || 0,
-      estoqueMinimo: Number(form.estoqueMinimo) || 0,
-      fornecedor: form.fornecedor,
-      custoPorUnidade: form.custoPorUnidade
-        ? Number(form.custoPorUnidade)
-        : undefined,
-      observacoes: form.observacoes,
-      ativo: form.ativo ?? true,
-    });
-
-    recarregar();
-    setAberto(false);
+    setSalvando(true);
+    try {
+      await salvarMateriaPrima({
+        id: form.id,
+        nome: form.nome!.trim(),
+        tipo: form.tipo as NotaPiramide,
+        unidade: form.unidade as UnidadeMedida,
+        estoqueAtual: Number(form.estoqueAtual) || 0,
+        estoqueMinimo: Number(form.estoqueMinimo) || 0,
+        fornecedor: form.fornecedor ?? '',
+        custoPorUnidade: form.custoPorUnidade
+          ? Number(form.custoPorUnidade)
+          : undefined,
+        observacoes: form.observacoes ?? '',
+        ativo: form.ativo ?? true,
+      });
+      setAberto(false);
+      recarregar();
+    } catch {
+      setErroForm('Nao foi possivel salvar. Verifique sua conexao.');
+    } finally {
+      setSalvando(false);
+    }
   }
 
-  function remover(m: IMateriaPrima) {
+  async function remover(m: IMateriaPrima) {
     if (
       window.confirm(
         `Excluir "${m.nome}"?\nSe ela estiver em alguma formula, o item ficara sem referencia.`
       )
     ) {
-      const db = carregarDB();
-      db.materiasPrimas = db.materiasPrimas.filter((x) => x.id !== m.id);
-      salvarDB(db);
+      await excluirMateriaPrima(m.id);
       recarregar();
     }
   }
 
-  // Filtro da busca
+  if (carregando) return <Carregando />;
+
   const filtrada = lista.filter((m) =>
     m.nome.toLowerCase().includes(busca.toLowerCase())
   );
-
   const emFalta = lista.filter((m) => m.estoqueAtual <= m.estoqueMinimo).length;
 
   return (
     <Box>
-      {/* Cabecalho */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 2,
-          mb: 3,
-        }}
-      >
-        <Box>
-          <Typography variant="h4" sx={{ mb: 0.5 }}>
-            Materias-Primas
-          </Typography>
-          <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
-            {lista.length} insumo(s) cadastrado(s)
-            {emFalta > 0 && ` • ${emFalta} abaixo do minimo`}
-          </Typography>
-        </Box>
-
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-          <TextField
-            placeholder="Buscar..."
-            size="small"
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon
-                      fontSize="small"
-                      sx={{ color: cores.cinzaMedio }}
-                    />
-                  </InputAdornment>
-                ),
-              },
-            }}
-            sx={{ width: 220 }}
-          />
-          <Button variant="contained" startIcon={<AddIcon />} onClick={abrirNovo}>
-            Nova Materia-Prima
-          </Button>
-        </Box>
-      </Box>
-
-      {/* Lista */}
-      {lista.length === 0 ? (
-        <Card>
-          <CardContent sx={{ textAlign: 'center', py: 6 }}>
-            <Inventory2Icon
-              sx={{ fontSize: 48, color: cores.cinzaMedio, mb: 1 }}
+      <Cabecalho
+        titulo="Materias-Primas"
+        subtitulo={
+          `${lista.length} insumo(s) cadastrado(s)` +
+          (emFalta > 0 ? ` • ${emFalta} abaixo do minimo` : '')
+        }
+        acao={
+          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+            <TextField
+              placeholder="Buscar..."
+              size="small"
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" sx={{ color: cores.cinzaMedio }} />
+                    </InputAdornment>
+                  ),
+                },
+              }}
+              sx={{ width: { xs: 160, sm: 220 } }}
             />
-            <Typography variant="body1" sx={{ color: cores.cinzaClaro }}>
-              Nenhuma materia-prima ainda.
-            </Typography>
-            <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
-              Cadastre suas essencias, fixadores e solventes para montar as
-              formulas. 🧪
-            </Typography>
-          </CardContent>
-        </Card>
+            <Button variant="contained" startIcon={<AddIcon />} onClick={abrirNovo}>
+              Nova
+            </Button>
+          </Box>
+        }
+      />
+
+      {erro && <ErroTela mensagem={erro} />}
+
+      {lista.length === 0 ? (
+        <Vazio
+          icone={<Inventory2Icon />}
+          titulo="Nenhuma materia-prima ainda."
+          descricao="Cadastre suas essencias, fixadores e solventes para montar as formulas. 🧪"
+        />
       ) : (
         <Card>
           <TableContainer>
@@ -227,16 +206,13 @@ export default function MateriasPrimas() {
               <TableBody>
                 {filtrada.map((m) => {
                   const baixo = m.estoqueAtual <= m.estoqueMinimo;
-                  // nivel visual: quanto do "dobro do minimo" ainda tem
                   const base = Math.max(m.estoqueMinimo * 2, 1);
                   const pct = Math.min((m.estoqueAtual / base) * 100, 100);
 
                   return (
                     <TableRow key={m.id} hover>
                       <TableCell>
-                        <Box
-                          sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
-                        >
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           {baixo && (
                             <WarningAmberIcon
                               fontSize="small"
@@ -266,10 +242,7 @@ export default function MateriasPrimas() {
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        <Typography
-                          variant="body2"
-                          sx={{ color: cores.cinzaMedio }}
-                        >
+                        <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
                           {m.estoqueMinimo} {m.unidade}
                         </Typography>
                       </TableCell>
@@ -279,29 +252,19 @@ export default function MateriasPrimas() {
                           value={pct}
                           sx={{
                             height: 6,
-                            borderRadius: 3,
-                            bgcolor: 'rgba(255,255,255,0.08)',
                             '& .MuiLinearProgress-bar': {
-                              bgcolor: baixo
-                                ? cores.descartado
-                                : cores.prontoVenda,
+                              bgcolor: baixo ? cores.descartado : cores.prontoVenda,
                             },
                           }}
                         />
                       </TableCell>
                       <TableCell>
-                        <Typography
-                          variant="body2"
-                          sx={{ color: cores.cinzaMedio }}
-                        >
+                        <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
                           {m.fornecedor || '—'}
                         </Typography>
                       </TableCell>
                       <TableCell align="right">
-                        <Typography
-                          variant="body2"
-                          sx={{ color: cores.cinzaMedio }}
-                        >
+                        <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
                           {m.custoPorUnidade
                             ? `R$ ${m.custoPorUnidade.toFixed(2)}`
                             : '—'}
@@ -333,7 +296,7 @@ export default function MateriasPrimas() {
         </Card>
       )}
 
-      {/* Modal de cadastro/edicao */}
+      {/* Modal */}
       <Dialog open={aberto} onClose={() => setAberto(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
           {form.id ? 'Editar Materia-Prima' : 'Nova Materia-Prima'}
@@ -414,9 +377,7 @@ export default function MateriasPrimas() {
               size="small"
               slotProps={{
                 input: {
-                  startAdornment: (
-                    <InputAdornment position="start">R$</InputAdornment>
-                  ),
+                  startAdornment: <InputAdornment position="start">R$</InputAdornment>,
                 },
               }}
             />
@@ -430,12 +391,12 @@ export default function MateriasPrimas() {
               rows={2}
             />
 
-            {erro && (
+            {erroForm && (
               <Typography
                 variant="body2"
                 sx={{ color: cores.descartado, flex: '1 1 100%' }}
               >
-                {erro}
+                {erroForm}
               </Typography>
             )}
           </Box>
@@ -444,8 +405,8 @@ export default function MateriasPrimas() {
           <Button onClick={() => setAberto(false)} color="secondary">
             Cancelar
           </Button>
-          <Button onClick={salvar} variant="contained">
-            Salvar
+          <Button onClick={salvar} variant="contained" disabled={salvando}>
+            {salvando ? 'Salvando...' : 'Salvar'}
           </Button>
         </DialogActions>
       </Dialog>

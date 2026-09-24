@@ -1,10 +1,10 @@
 // ============================================================
 // SILLAGE LAB - MACERACAO
 // Arquivo: src/pages/Maceracao.tsx
-// Agenda + rotina de manutencao (agitar / arejar) do dia
+// Agenda + rotina de manutencao do dia (nuvem)
 // ============================================================
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Box,
@@ -30,19 +30,22 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { cores } from '../theme/theme';
 import { NOMES_DIAS } from '../models';
-import type { DiaSemana } from '../models';
+import type { DiaSemana, ILote, IPerfume, IManutencao, IConfig } from '../models';
 import {
   listarLotes,
   listarPerfumes,
+  listarManutencoes,
+  carregarConfig,
   calcularStatusLote,
   diasDesdeProducao,
-  carregarConfig,
   ehDiaDeRotina,
   loteEmMaceracao,
-  manutencaoFeitaHoje,
   registrarManutencao,
   desfazerManutencaoHoje,
+  mesmoDia,
 } from '../data/db';
+import { useDados } from '../hooks/useDados';
+import { Carregando, Vazio } from '../components/Estados';
 
 interface Evento {
   loteId: string;
@@ -50,7 +53,7 @@ interface Evento {
   perfume: string;
   dias: number;
   data: string;
-  diffDias: number; // negativo = passado, 0 = hoje, positivo = futuro
+  diffDias: number;
 }
 
 function dataBR(iso: string): string {
@@ -65,7 +68,6 @@ function difDias(iso: string): number {
   return Math.round((d.getTime() - h.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-// Bloco de secao da agenda
 function Secao({
   titulo,
   icone,
@@ -91,7 +93,7 @@ function Secao({
             sx={{ bgcolor: `${cor}22`, color: cor, fontWeight: 700 }}
           />
         </Box>
-        <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+        <Divider sx={{ mb: 2 }} />
 
         {eventos.length === 0 ? (
           <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
@@ -151,66 +153,96 @@ function Secao({
   );
 }
 
+interface Base {
+  lotes: ILote[];
+  perfumes: IPerfume[];
+  manutencoes: IManutencao[];
+  config: IConfig;
+  diaDeRotina: boolean;
+}
+
+async function carregarBase(): Promise<Base> {
+  const [lotes, perfumes, manutencoes, config, diaDeRotina] = await Promise.all([
+    listarLotes(),
+    listarPerfumes(),
+    listarManutencoes(),
+    carregarConfig(),
+    ehDiaDeRotina(),
+  ]);
+  return { lotes, perfumes, manutencoes, config, diaDeRotina };
+}
+
 export default function Maceracao() {
-  const [versao, setVersao] = useState(0); // forca recarregar apos marcar
-  const recarregar = () => setVersao((v) => v + 1);
-
-  const lotes = listarLotes();
-  const perfumes = listarPerfumes();
-  const config = carregarConfig();
-  const diaDeRotina = ehDiaDeRotina();
-  const hojeNome = NOMES_DIAS[new Date().getDay() as DiaSemana];
-
-  // Observacao opcional por lote na hora de marcar
+  const { dados: base, carregando, recarregar } = useDados<Base | null>(
+    carregarBase,
+    null
+  );
   const [obs, setObs] = useState<Record<string, string>>({});
+  const [ocupado, setOcupado] = useState(false);
+
+  if (carregando || !base) return <Carregando />;
+
+  const { lotes, perfumes, manutencoes, config, diaDeRotina } = base;
+  const hojeNome = NOMES_DIAS[new Date().getDay() as DiaSemana];
 
   const nomePerfume = (id: string) =>
     perfumes.find((x) => x.id === id)?.nome ?? '(perfume removido)';
 
-  // Lotes que ainda estao macerando (rotina so vale para eles)
+  const feitoHoje = (loteId: string) =>
+    manutencoes.some((m) => m.loteId === loteId && mesmoDia(m.data, new Date()));
+
   const emMaceracao = lotes.filter((l) => loteEmMaceracao(l));
+  const pendentes = emMaceracao.filter((l) => !feitoHoje(l.id));
+  const feitos = emMaceracao.filter((l) => feitoHoje(l.id));
 
-  const dados = useMemo(() => {
-    const todos: Evento[] = [];
-
-    lotes.forEach((l) => {
-      if (l.statusManual === 'Descartado') return;
-      l.marcos.forEach((m) => {
-        if (m.dias > l.maceracaoDias) return;
-        todos.push({
-          loteId: l.id,
-          codigo: l.codigo,
-          perfume: nomePerfume(l.perfumeId),
-          dias: m.dias,
-          data: m.data,
-          diffDias: difDias(m.data),
-        });
+  // Agenda
+  const todos: Evento[] = [];
+  lotes.forEach((l) => {
+    if (l.statusManual === 'Descartado') return;
+    l.marcos.forEach((m) => {
+      if (m.dias > l.maceracaoDias) return;
+      todos.push({
+        loteId: l.id,
+        codigo: l.codigo,
+        perfume: nomePerfume(l.perfumeId),
+        dias: m.dias,
+        data: m.data,
+        diffDias: difDias(m.data),
       });
     });
+  });
+  todos.sort((a, b) => a.data.localeCompare(b.data));
 
-    todos.sort((a, b) => a.data.localeCompare(b.data));
-
-    return {
-      hoje: todos.filter((e) => e.diffDias === 0),
-      proximos: todos.filter((e) => e.diffDias > 0 && e.diffDias <= 7),
-      futuros: todos.filter((e) => e.diffDias > 7),
-      passados: todos.filter((e) => e.diffDias < 0).reverse().slice(0, 10),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lotes, perfumes, versao]);
+  const agenda = {
+    hoje: todos.filter((e) => e.diffDias === 0),
+    proximos: todos.filter((e) => e.diffDias > 0 && e.diffDias <= 7),
+    futuros: todos.filter((e) => e.diffDias > 7),
+    passados: todos.filter((e) => e.diffDias < 0).reverse().slice(0, 10),
+  };
 
   const ativos = lotes.filter((l) => l.statusManual !== 'Descartado');
 
-  function marcar(loteId: string) {
-    registrarManutencao({ loteId, observacao: obs[loteId] || undefined });
+  async function marcar(loteId: string) {
+    setOcupado(true);
+    await registrarManutencao({ loteId, observacao: obs[loteId] || undefined });
     setObs({ ...obs, [loteId]: '' });
+    setOcupado(false);
     recarregar();
   }
 
-  function marcarTodos() {
-    emMaceracao
-      .filter((l) => !manutencaoFeitaHoje(l.id))
-      .forEach((l) => registrarManutencao({ loteId: l.id }));
+  async function marcarTodos() {
+    setOcupado(true);
+    for (const l of pendentes) {
+      await registrarManutencao({ loteId: l.id });
+    }
+    setOcupado(false);
+    recarregar();
+  }
+
+  async function desfazer(loteId: string) {
+    setOcupado(true);
+    await desfazerManutencaoHoje(loteId);
+    setOcupado(false);
     recarregar();
   }
 
@@ -221,23 +253,14 @@ export default function Maceracao() {
         <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 3 }}>
           Agenda do seu laboratorio
         </Typography>
-        <Card>
-          <CardContent sx={{ textAlign: 'center', py: 6 }}>
-            <EventIcon sx={{ fontSize: 48, color: cores.cinzaMedio, mb: 1 }} />
-            <Typography variant="body1" sx={{ color: cores.cinzaClaro }}>
-              Nenhum lote em maceracao.
-            </Typography>
-            <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
-              Produza um lote para acompanhar a agenda aqui. 📅
-            </Typography>
-          </CardContent>
-        </Card>
+        <Vazio
+          icone={<EventIcon />}
+          titulo="Nenhum lote em maceracao."
+          descricao="Produza um lote para acompanhar a agenda aqui. 📅"
+        />
       </Box>
     );
   }
-
-  const pendentes = emMaceracao.filter((l) => !manutencaoFeitaHoje(l.id));
-  const feitos = emMaceracao.filter((l) => manutencaoFeitaHoje(l.id));
 
   return (
     <Box>
@@ -246,7 +269,7 @@ export default function Maceracao() {
         Agenda do seu laboratorio
       </Typography>
 
-      {/* -------- ROTINA DE MANUTENCAO DO DIA -------- */}
+      {/* Rotina do dia */}
       {diaDeRotina && config.rotina.ativa && (
         <Card sx={{ mb: 3, borderColor: `${cores.dourado}55` }}>
           <CardContent>
@@ -262,9 +285,7 @@ export default function Maceracao() {
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <AutorenewIcon sx={{ color: cores.dourado }} />
-                <Typography variant="h6">
-                  Rotina de hoje ({hojeNome})
-                </Typography>
+                <Typography variant="h6">Rotina de hoje ({hojeNome})</Typography>
                 <Chip
                   label={`${pendentes.length} pendente(s)`}
                   size="small"
@@ -273,24 +294,27 @@ export default function Maceracao() {
                       pendentes.length > 0
                         ? `${cores.macerando}22`
                         : `${cores.prontoVenda}22`,
-                    color:
-                      pendentes.length > 0 ? cores.macerando : cores.prontoVenda,
+                    color: pendentes.length > 0 ? cores.macerando : cores.prontoVenda,
                     fontWeight: 700,
                   }}
                 />
               </Box>
               {pendentes.length > 0 && (
-                <Button size="small" variant="contained" onClick={marcarTodos}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={marcarTodos}
+                  disabled={ocupado}
+                >
                   Marcar todos como feitos
                 </Button>
               )}
             </Box>
 
             <Typography variant="body2" sx={{ color: cores.cinzaMedio, mb: 2 }}>
-              {config.rotina.acoes.join(' + ')} nos lotes que ainda estao
-              macerando.
+              {config.rotina.acoes.join(' + ')} nos lotes que ainda estao macerando.
             </Typography>
-            <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+            <Divider sx={{ mb: 2 }} />
 
             {emMaceracao.length === 0 ? (
               <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
@@ -310,10 +334,11 @@ export default function Maceracao() {
                   >
                     <Checkbox
                       checked={false}
+                      disabled={ocupado}
                       onChange={() => marcar(l.id)}
                       sx={{ color: cores.dourado, p: 0.5 }}
                     />
-                    <Box sx={{ minWidth: 180 }}>
+                    <Box sx={{ minWidth: 170 }}>
                       <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         {nomePerfume(l.perfumeId)}
                       </Typography>
@@ -333,7 +358,7 @@ export default function Maceracao() {
 
                 {feitos.length > 0 && (
                   <>
-                    <Divider sx={{ my: 1, borderColor: 'rgba(176,141,87,0.12)' }} />
+                    <Divider sx={{ my: 1 }} />
                     {feitos.map((l) => (
                       <Box
                         key={l.id}
@@ -355,20 +380,15 @@ export default function Maceracao() {
                           >
                             {nomePerfume(l.perfumeId)}
                           </Typography>
-                          <Typography
-                            variant="caption"
-                            sx={{ color: cores.cinzaMedio }}
-                          >
+                          <Typography variant="caption" sx={{ color: cores.cinzaMedio }}>
                             {l.codigo} • feito hoje
                           </Typography>
                         </Box>
                         <Tooltip title="Desfazer">
                           <IconButton
                             size="small"
-                            onClick={() => {
-                              desfazerManutencaoHoje(l.id);
-                              recarregar();
-                            }}
+                            onClick={() => desfazer(l.id)}
+                            disabled={ocupado}
                             sx={{ color: cores.cinzaMedio }}
                           >
                             <UndoIcon fontSize="small" />
@@ -388,7 +408,7 @@ export default function Maceracao() {
         titulo="Hoje"
         icone={<TodayIcon />}
         cor={cores.dourado}
-        eventos={dados.hoje}
+        eventos={agenda.hoje}
         vazio="Nenhum marco vence hoje."
       />
 
@@ -396,7 +416,7 @@ export default function Maceracao() {
         titulo="Proximos 7 dias"
         icone={<UpcomingIcon />}
         cor={cores.prontoTeste}
-        eventos={dados.proximos}
+        eventos={agenda.proximos}
         vazio="Nada previsto para esta semana."
       />
 
@@ -404,17 +424,17 @@ export default function Maceracao() {
         titulo="Mais adiante"
         icone={<EventIcon />}
         cor={cores.cinzaMedio}
-        eventos={dados.futuros}
+        eventos={agenda.futuros}
         vazio="Nenhum marco futuro."
       />
 
-      {/* Progresso dos lotes ativos */}
+      {/* Progresso */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 2 }}>
             🧴 Progresso dos lotes
           </Typography>
-          <Divider sx={{ mb: 2, borderColor: 'rgba(176,141,87,0.12)' }} />
+          <Divider sx={{ mb: 2 }} />
 
           {ativos.length === 0 ? (
             <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
@@ -451,8 +471,6 @@ export default function Maceracao() {
                       value={pct}
                       sx={{
                         height: 8,
-                        borderRadius: 4,
-                        bgcolor: 'rgba(255,255,255,0.08)',
                         '& .MuiLinearProgress-bar': {
                           bgcolor: completo ? cores.prontoVenda : cores.macerando,
                         },
@@ -470,7 +488,7 @@ export default function Maceracao() {
         titulo="Ja atingidos"
         icone={<HistoryIcon />}
         cor={cores.prontoVenda}
-        eventos={dados.passados}
+        eventos={agenda.passados}
         vazio="Nenhum marco atingido ainda."
       />
     </Box>

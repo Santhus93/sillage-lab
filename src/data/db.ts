@@ -1,14 +1,30 @@
 // ============================================================
-// SILLAGE LAB - CAMADA DE DADOS (LocalStorage)
+// SILLAGE LAB - CAMADA DE DADOS (Firestore / nuvem)
 // Arquivo: src/data/db.ts
-// Le e grava TODO o banco numa unica chave do LocalStorage.
-// v2: rotina de manutencao (agitar / arejar) + migracao automatica
+//
+// Mesma API de antes, porem ASSINCRONA (async/await), porque
+// agora os dados vem da nuvem e sao compartilhados.
+//
+// Os calculos puros (status, marcos, dias) continuam
+// sincronos - eles nao dependem do banco.
 // ============================================================
 
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  query,
+  where,
+  writeBatch,
+} from 'firebase/firestore';
 import { v4 as uuid } from 'uuid';
 
+import { db as fs, LAB_PATH } from './firebase';
+
 import type {
-  ISillageDB,
   IConfig,
   IPerfume,
   IFormula,
@@ -17,6 +33,7 @@ import type {
   IMateriaPrima,
   IManutencao,
   IMarcoMaceracao,
+  ISillageDB,
   StatusLote,
   AcaoManutencao,
   DiaSemana,
@@ -26,82 +43,24 @@ import {
   MACERACAO_PADRAO,
   MARCOS_PADRAO,
   ROTINA_PADRAO,
-  STORAGE_KEY,
   SCHEMA_VERSION,
 } from '../models';
 
 // ------------------------------------------------------------
-// BANCO INICIAL (quando abre pela primeira vez)
+// ATALHOS DE CAMINHO
 // ------------------------------------------------------------
-function bancoVazio(): ISillageDB {
-  const agora = new Date().toISOString();
-  const config: IConfig = {
-    usuario: 'Rodrigo',
-    senhaHash: '',            // definida no primeiro acesso
-    nomeLab: 'Sillage Lab',
-    subtitulo: 'Gestao de Formulas e Maceracao',
-    maceracaoPadrao: { ...MACERACAO_PADRAO },
-    marcosPadrao: [...MARCOS_PADRAO],
-    rotina: { ...ROTINA_PADRAO, diasSemana: [...ROTINA_PADRAO.diasSemana] },
-    tema: 'dark',
-    moeda: 'BRL',
-    versaoApp: '1.1.0',
-    atualizadoEm: agora,
-  };
+const docLab = () => doc(fs, LAB_PATH);
+const col = (nome: string) => collection(fs, `${LAB_PATH}/${nome}`);
+const docEm = (nome: string, id: string) => doc(fs, `${LAB_PATH}/${nome}/${id}`);
 
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    config,
-    materiasPrimas: [],
-    perfumes: [],
-    formulas: [],
-    lotes: [],
-    avaliacoes: [],
-    manutencoes: [],
-  };
-}
-
-// Garante que bancos antigos (v1) ganhem os campos novos
-function migrar(db: ISillageDB): ISillageDB {
-  if (!Array.isArray(db.manutencoes)) db.manutencoes = [];
-  if (!db.config.rotina) {
-    db.config.rotina = {
-      ...ROTINA_PADRAO,
-      diasSemana: [...ROTINA_PADRAO.diasSemana],
-    };
-  }
-  db.schemaVersion = SCHEMA_VERSION;
-  return db;
+// Le todos os documentos de uma colecao
+async function lerTodos<T>(nome: string): Promise<T[]> {
+  const snap = await getDocs(col(nome));
+  return snap.docs.map((d) => d.data() as T);
 }
 
 // ------------------------------------------------------------
-// LEITURA / GRAVACAO BRUTA
-// ------------------------------------------------------------
-export function carregarDB(): ISillageDB {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    const novo = bancoVazio();
-    salvarDB(novo);
-    return novo;
-  }
-  try {
-    const db = migrar(JSON.parse(raw) as ISillageDB);
-    return db;
-  } catch {
-    // se corromper, nao perde tudo: guarda copia e recomeca
-    localStorage.setItem(STORAGE_KEY + '_corrompido', raw);
-    const novo = bancoVazio();
-    salvarDB(novo);
-    return novo;
-  }
-}
-
-export function salvarDB(db: ISillageDB): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-}
-
-// ------------------------------------------------------------
-// HELPERS DE DATA / MACERACAO
+// HELPERS DE DATA / MACERACAO (puros, sem banco)
 // ------------------------------------------------------------
 function addDias(dataISO: string, dias: number): string {
   const d = new Date(dataISO);
@@ -109,7 +68,6 @@ function addDias(dataISO: string, dias: number): string {
   return d.toISOString();
 }
 
-// Zera a hora para comparar apenas o DIA
 function soData(d: Date): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -120,7 +78,6 @@ export function mesmoDia(a: string | Date, b: string | Date): boolean {
   return soData(new Date(a)).getTime() === soData(new Date(b)).getTime();
 }
 
-// Gera os marcos (7, 15, 30...) a partir da data de producao
 export function gerarMarcos(
   dataProducao: string,
   marcosDias: number[]
@@ -128,24 +85,18 @@ export function gerarMarcos(
   const hoje = new Date();
   return marcosDias.map((dias) => {
     const data = addDias(dataProducao, dias);
-    return {
-      dias,
-      data,
-      atingido: new Date(data) <= hoje,
-    };
+    return { dias, data, atingido: new Date(data) <= hoje };
   });
 }
 
-// Calcula o status do lote a partir das datas (semaforo)
 export function calcularStatusLote(lote: ILote): StatusLote {
-  if (lote.statusManual) return lote.statusManual; // ex: "Descartado"
+  if (lote.statusManual) return lote.statusManual;
 
   const hoje = new Date();
   const fim = new Date(lote.dataPrevista);
 
   if (hoje >= fim) return 'Pronto para Venda';
 
-  // atingiu ao menos o primeiro marco intermediario?
   const primeiroMarco = lote.marcos.find((m) => m.dias >= 7);
   if (primeiroMarco && new Date(primeiroMarco.data) <= hoje) {
     return 'Pronto para Teste';
@@ -153,167 +104,242 @@ export function calcularStatusLote(lote: ILote): StatusLote {
   return 'Macerando';
 }
 
-// Dias corridos desde a producao
 export function diasDesdeProducao(dataProducao: string): number {
-  const ms = soData(new Date()).getTime() - soData(new Date(dataProducao)).getTime();
+  const ms =
+    soData(new Date()).getTime() - soData(new Date(dataProducao)).getTime();
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
-// ------------------------------------------------------------
-// CRUD - PERFUMES
-// ------------------------------------------------------------
-export function listarPerfumes(): IPerfume[] {
-  return carregarDB().perfumes;
+// Lote ainda esta macerando? (rotina para quando termina)
+export function loteEmMaceracao(lote: ILote): boolean {
+  if (lote.statusManual === 'Descartado') return false;
+  const hoje = soData(new Date());
+  const inicio = soData(new Date(lote.dataProducao));
+  const fim = soData(new Date(lote.dataPrevista));
+  return hoje >= inicio && hoje < fim;
 }
 
-export function salvarPerfume(
+// ------------------------------------------------------------
+// CONFIG
+// ------------------------------------------------------------
+function configPadrao(): IConfig {
+  return {
+    usuario: 'Sillage',
+    senhaHash: '',                 // nao usado mais (login e do Firebase)
+    nomeLab: 'Sillage Lab',
+    subtitulo: 'Gestao de Formulas e Maceracao',
+    maceracaoPadrao: { ...MACERACAO_PADRAO },
+    marcosPadrao: [...MARCOS_PADRAO],
+    rotina: { ...ROTINA_PADRAO, diasSemana: [...ROTINA_PADRAO.diasSemana] },
+    tema: 'dark',
+    moeda: 'BRL',
+    versaoApp: '2.0.0',
+    atualizadoEm: new Date().toISOString(),
+  };
+}
+
+export async function carregarConfig(): Promise<IConfig> {
+  const snap = await getDoc(docLab());
+  if (!snap.exists()) {
+    const padrao = configPadrao();
+    await setDoc(docLab(), { schemaVersion: SCHEMA_VERSION, config: padrao });
+    return padrao;
+  }
+  const dados = snap.data() as { config?: IConfig };
+  // completa campos que possam faltar
+  return { ...configPadrao(), ...(dados.config ?? {}) };
+}
+
+export async function salvarConfig(parcial: Partial<IConfig>): Promise<IConfig> {
+  const atual = await carregarConfig();
+  const novo: IConfig = {
+    ...atual,
+    ...parcial,
+    atualizadoEm: new Date().toISOString(),
+  };
+  await setDoc(
+    docLab(),
+    { schemaVersion: SCHEMA_VERSION, config: novo },
+    { merge: true }
+  );
+  return novo;
+}
+
+// ------------------------------------------------------------
+// PERFUMES
+// ------------------------------------------------------------
+export async function listarPerfumes(): Promise<IPerfume[]> {
+  const lista = await lerTodos<IPerfume>('perfumes');
+  return lista.sort((a, b) => a.nome.localeCompare(b.nome));
+}
+
+export async function salvarPerfume(
   p: Omit<IPerfume, 'id' | 'criadoEm' | 'atualizadoEm'> & { id?: string }
-): IPerfume {
-  const db = carregarDB();
+): Promise<IPerfume> {
   const agora = new Date().toISOString();
 
   if (p.id) {
-    const idx = db.perfumes.findIndex((x) => x.id === p.id);
-    const atualizado: IPerfume = {
-      ...(db.perfumes[idx]),
-      ...p,
-      id: p.id,
-      atualizadoEm: agora,
-    };
-    db.perfumes[idx] = atualizado;
-    salvarDB(db);
+    const snap = await getDoc(docEm('perfumes', p.id));
+    const antigo = snap.data() as IPerfume;
+    const atualizado: IPerfume = { ...antigo, ...p, id: p.id, atualizadoEm: agora };
+    await setDoc(docEm('perfumes', p.id), atualizado);
     return atualizado;
   }
 
-  const novo: IPerfume = {
+  const novo = {
     ...p,
     id: uuid(),
     criadoEm: agora,
     atualizadoEm: agora,
   } as IPerfume;
-  db.perfumes.push(novo);
-  salvarDB(db);
+  await setDoc(docEm('perfumes', novo.id), novo);
   return novo;
 }
 
-export function excluirPerfume(id: string): void {
-  const db = carregarDB();
-  const lotesDoPerfume = db.lotes.filter((l) => l.perfumeId === id).map((l) => l.id);
+export async function excluirPerfume(id: string): Promise<void> {
+  const batch = writeBatch(fs);
 
-  db.perfumes = db.perfumes.filter((p) => p.id !== id);
-  db.formulas = db.formulas.filter((f) => f.perfumeId !== id);
-  db.lotes = db.lotes.filter((l) => l.perfumeId !== id);
-  db.avaliacoes = db.avaliacoes.filter((a) => !lotesDoPerfume.includes(a.loteId));
-  db.manutencoes = db.manutencoes.filter((m) => !lotesDoPerfume.includes(m.loteId));
-  salvarDB(db);
+  // apaga o perfume
+  batch.delete(docEm('perfumes', id));
+
+  // formulas do perfume
+  const formulas = await getDocs(query(col('formulas'), where('perfumeId', '==', id)));
+  formulas.forEach((d) => batch.delete(d.ref));
+
+  // lotes do perfume (e seus dependentes)
+  const lotes = await getDocs(query(col('lotes'), where('perfumeId', '==', id)));
+  const idsLotes: string[] = [];
+  lotes.forEach((d) => {
+    idsLotes.push(d.id);
+    batch.delete(d.ref);
+  });
+
+  for (const loteId of idsLotes) {
+    const avals = await getDocs(query(col('avaliacoes'), where('loteId', '==', loteId)));
+    avals.forEach((d) => batch.delete(d.ref));
+    const manus = await getDocs(query(col('manutencoes'), where('loteId', '==', loteId)));
+    manus.forEach((d) => batch.delete(d.ref));
+  }
+
+  await batch.commit();
 }
 
 // ------------------------------------------------------------
-// CRUD - MATERIAS-PRIMAS
+// MATERIAS-PRIMAS
 // ------------------------------------------------------------
-export function listarMateriasPrimas(): IMateriaPrima[] {
-  return carregarDB().materiasPrimas;
+export async function listarMateriasPrimas(): Promise<IMateriaPrima[]> {
+  const lista = await lerTodos<IMateriaPrima>('materiasPrimas');
+  return lista.sort((a, b) => a.nome.localeCompare(b.nome));
 }
 
-export function salvarMateriaPrima(
+export async function salvarMateriaPrima(
   m: Omit<IMateriaPrima, 'id' | 'criadoEm' | 'atualizadoEm'> & { id?: string }
-): IMateriaPrima {
-  const db = carregarDB();
+): Promise<IMateriaPrima> {
   const agora = new Date().toISOString();
 
   if (m.id) {
-    const idx = db.materiasPrimas.findIndex((x) => x.id === m.id);
-    const atualizado = { ...db.materiasPrimas[idx], ...m, id: m.id, atualizadoEm: agora };
-    db.materiasPrimas[idx] = atualizado;
-    salvarDB(db);
+    const snap = await getDoc(docEm('materiasPrimas', m.id));
+    const antigo = snap.data() as IMateriaPrima;
+    const atualizado = { ...antigo, ...m, id: m.id, atualizadoEm: agora };
+    await setDoc(docEm('materiasPrimas', m.id), atualizado);
     return atualizado;
   }
 
-  const novo: IMateriaPrima = {
+  const nova = {
     ...m,
     id: uuid(),
     criadoEm: agora,
     atualizadoEm: agora,
   } as IMateriaPrima;
-  db.materiasPrimas.push(novo);
-  salvarDB(db);
-  return novo;
+  await setDoc(docEm('materiasPrimas', nova.id), nova);
+  return nova;
+}
+
+export async function excluirMateriaPrima(id: string): Promise<void> {
+  await deleteDoc(docEm('materiasPrimas', id));
 }
 
 // ------------------------------------------------------------
-// CRUD - FORMULAS
+// FORMULAS
 // ------------------------------------------------------------
-export function listarFormulasDoPerfume(perfumeId: string): IFormula[] {
-  return carregarDB().formulas.filter((f) => f.perfumeId === perfumeId);
+export async function listarFormulasDoPerfume(
+  perfumeId: string
+): Promise<IFormula[]> {
+  const snap = await getDocs(query(col('formulas'), where('perfumeId', '==', perfumeId)));
+  return snap.docs.map((d) => d.data() as IFormula);
 }
 
-export function formulaAtiva(perfumeId: string): IFormula | undefined {
-  return carregarDB().formulas.find((f) => f.perfumeId === perfumeId && f.ativa);
+export async function formulaAtiva(
+  perfumeId: string
+): Promise<IFormula | undefined> {
+  const lista = await listarFormulasDoPerfume(perfumeId);
+  return lista.find((f) => f.ativa);
 }
 
-export function salvarFormula(
+export async function salvarFormula(
   f: Omit<IFormula, 'id' | 'versao' | 'criadoEm' | 'atualizadoEm'> & { id?: string }
-): IFormula {
-  const db = carregarDB();
+): Promise<IFormula> {
   const agora = new Date().toISOString();
+  const existentes = await listarFormulasDoPerfume(f.perfumeId);
+  const batch = writeBatch(fs);
 
-  // se marcar como ativa, desativa as outras do mesmo perfume
+  // so uma versao ativa por perfume
   if (f.ativa) {
-    db.formulas
-      .filter((x) => x.perfumeId === f.perfumeId)
-      .forEach((x) => (x.ativa = false));
+    existentes
+      .filter((x) => x.ativa)
+      .forEach((x) => batch.update(docEm('formulas', x.id), { ativa: false }));
   }
 
   if (f.id) {
-    const idx = db.formulas.findIndex((x) => x.id === f.id);
-    const atualizado = { ...db.formulas[idx], ...f, id: f.id, atualizadoEm: agora };
-    db.formulas[idx] = atualizado;
-    salvarDB(db);
-    return atualizado;
+    const antiga = existentes.find((x) => x.id === f.id);
+    const atualizada = { ...antiga, ...f, id: f.id, atualizadoEm: agora } as IFormula;
+    batch.set(docEm('formulas', f.id), atualizada);
+    await batch.commit();
+    return atualizada;
   }
 
-  // nova versao = maior versao existente + 1
-  const versaoAtual = db.formulas
-    .filter((x) => x.perfumeId === f.perfumeId)
-    .reduce((max, x) => Math.max(max, x.versao), 0);
-
-  const nova: IFormula = {
+  const versao = existentes.reduce((max, x) => Math.max(max, x.versao), 0) + 1;
+  const nova = {
     ...f,
     id: uuid(),
-    versao: versaoAtual + 1,
+    versao,
     criadoEm: agora,
     atualizadoEm: agora,
   } as IFormula;
-  db.formulas.push(nova);
-  salvarDB(db);
+
+  batch.set(docEm('formulas', nova.id), nova);
+  await batch.commit();
   return nova;
 }
 
 // ------------------------------------------------------------
-// CRUD - LOTES
+// LOTES
 // ------------------------------------------------------------
-export function listarLotes(): ILote[] {
-  return carregarDB().lotes;
+export async function listarLotes(): Promise<ILote[]> {
+  const lista = await lerTodos<ILote>('lotes');
+  return lista.sort((a, b) => b.dataProducao.localeCompare(a.dataProducao));
 }
 
-// Cria um lote ja calculando datas, marcos e codigo
-export function criarLote(dados: {
+export async function criarLote(dados: {
   perfumeId: string;
   formulaId: string;
   volumeMl: number;
-  dataProducao: string;   // ISO
+  dataProducao: string;
   maceracaoDias: number;
   observacoes?: string;
-}): ILote {
-  const db = carregarDB();
+}): Promise<ILote> {
   const agora = new Date().toISOString();
+  const [config, lotes, perfumes] = await Promise.all([
+    carregarConfig(),
+    listarLotes(),
+    listarPerfumes(),
+  ]);
 
-  const perfume = db.perfumes.find((p) => p.id === dados.perfumeId);
+  const perfume = perfumes.find((p) => p.id === dados.perfumeId);
   const prefixo = perfume?.codigo ?? 'LOT';
 
-  // conta quantos lotes ja existem no dia (para o sequencial)
   const dia = dados.dataProducao.slice(0, 10).replace(/-/g, '');
-  const seq = db.lotes.filter((l) => l.codigo.includes(dia)).length + 1;
+  const seq = lotes.filter((l) => l.codigo.includes(dia)).length + 1;
   const codigo = `${prefixo}-${dia}-${String(seq).padStart(3, '0')}`;
 
   const novo: ILote = {
@@ -325,178 +351,223 @@ export function criarLote(dados: {
     dataProducao: dados.dataProducao,
     maceracaoDias: dados.maceracaoDias,
     dataPrevista: addDias(dados.dataProducao, dados.maceracaoDias),
-    marcos: gerarMarcos(dados.dataProducao, db.config.marcosPadrao),
-    observacoes: dados.observacoes,
+    marcos: gerarMarcos(dados.dataProducao, config.marcosPadrao),
+    observacoes: dados.observacoes ?? '',
     criadoEm: agora,
     atualizadoEm: agora,
   };
 
-  db.lotes.push(novo);
-  salvarDB(db);
+  await setDoc(docEm('lotes', novo.id), novo);
   return novo;
 }
 
+export async function atualizarLote(
+  id: string,
+  campos: Partial<ILote>
+): Promise<void> {
+  await setDoc(
+    docEm('lotes', id),
+    { ...campos, atualizadoEm: new Date().toISOString() },
+    { merge: true }
+  );
+}
+
+export async function excluirLote(id: string): Promise<void> {
+  const batch = writeBatch(fs);
+  batch.delete(docEm('lotes', id));
+
+  const avals = await getDocs(query(col('avaliacoes'), where('loteId', '==', id)));
+  avals.forEach((d) => batch.delete(d.ref));
+
+  const manus = await getDocs(query(col('manutencoes'), where('loteId', '==', id)));
+  manus.forEach((d) => batch.delete(d.ref));
+
+  await batch.commit();
+}
+
 // ------------------------------------------------------------
-// CRUD - AVALIACOES
+// AVALIACOES
 // ------------------------------------------------------------
-export function listarAvaliacoesDoLote(loteId: string): IAvaliacao[] {
-  return carregarDB()
-    .avaliacoes.filter((a) => a.loteId === loteId)
+export async function listarAvaliacoes(): Promise<IAvaliacao[]> {
+  return lerTodos<IAvaliacao>('avaliacoes');
+}
+
+export async function listarAvaliacoesDoLote(
+  loteId: string
+): Promise<IAvaliacao[]> {
+  const snap = await getDocs(query(col('avaliacoes'), where('loteId', '==', loteId)));
+  return snap.docs
+    .map((d) => d.data() as IAvaliacao)
     .sort((a, b) => a.data.localeCompare(b.data));
 }
 
-export function salvarAvaliacao(
+export async function salvarAvaliacao(
   a: Omit<IAvaliacao, 'id' | 'criadoEm'> & { id?: string }
-): IAvaliacao {
-  const db = carregarDB();
+): Promise<IAvaliacao> {
   const agora = new Date().toISOString();
-
-  if (a.id) {
-    const idx = db.avaliacoes.findIndex((x) => x.id === a.id);
-    const atualizado = { ...db.avaliacoes[idx], ...a, id: a.id };
-    db.avaliacoes[idx] = atualizado;
-    salvarDB(db);
-    return atualizado;
-  }
-
-  const nova: IAvaliacao = { ...a, id: uuid(), criadoEm: agora } as IAvaliacao;
-  db.avaliacoes.push(nova);
-  salvarDB(db);
+  const id = a.id ?? uuid();
+  const nova = { ...a, id, criadoEm: agora } as IAvaliacao;
+  await setDoc(docEm('avaliacoes', id), nova);
   return nova;
 }
 
-// ============================================================
-// ROTINA DE MANUTENCAO (agitar / arejar)
-// ============================================================
-
-// Hoje e dia de rotina? (conforme configuracao)
-export function ehDiaDeRotina(data: Date = new Date()): boolean {
-  const { rotina } = carregarDB().config;
+// ------------------------------------------------------------
+// ROTINA DE MANUTENCAO
+// ------------------------------------------------------------
+export async function ehDiaDeRotina(data: Date = new Date()): Promise<boolean> {
+  const { rotina } = await carregarConfig();
   if (!rotina.ativa) return false;
   return rotina.diasSemana.includes(data.getDay() as DiaSemana);
 }
 
-// O lote ainda esta no periodo de maceracao?
-// REGRA: a rotina PARA quando a maceracao termina.
-export function loteEmMaceracao(lote: ILote): boolean {
-  if (lote.statusManual === 'Descartado') return false;
-  const hoje = soData(new Date());
-  const inicio = soData(new Date(lote.dataProducao));
-  const fim = soData(new Date(lote.dataPrevista));
-  return hoje >= inicio && hoje < fim;
+export async function listarManutencoes(): Promise<IManutencao[]> {
+  return lerTodos<IManutencao>('manutencoes');
 }
 
-// Manutencoes de um lote (mais recente por ultimo)
-export function listarManutencoesDoLote(loteId: string): IManutencao[] {
-  return carregarDB()
-    .manutencoes.filter((m) => m.loteId === loteId)
+export async function listarManutencoesDoLote(
+  loteId: string
+): Promise<IManutencao[]> {
+  const snap = await getDocs(query(col('manutencoes'), where('loteId', '==', loteId)));
+  return snap.docs
+    .map((d) => d.data() as IManutencao)
     .sort((a, b) => a.data.localeCompare(b.data));
 }
 
-// Ja registrou a manutencao de hoje neste lote?
-export function manutencaoFeitaHoje(loteId: string): boolean {
-  return carregarDB().manutencoes.some(
-    (m) => m.loteId === loteId && mesmoDia(m.data, new Date())
-  );
-}
-
-// Lotes que precisam de manutencao hoje (ainda macerando e nao feitos)
-export function lotesPendentesRotina(): ILote[] {
-  if (!ehDiaDeRotina()) return [];
-  const db = carregarDB();
-  return db.lotes.filter(
-    (l) =>
-      loteEmMaceracao(l) &&
-      !db.manutencoes.some((m) => m.loteId === l.id && mesmoDia(m.data, new Date()))
-  );
-}
-
-// Registra a execucao da rotina num lote
-export function registrarManutencao(dados: {
+export async function registrarManutencao(dados: {
   loteId: string;
   acoes?: AcaoManutencao[];
   observacao?: string;
   data?: string;
-}): IManutencao {
-  const db = carregarDB();
+}): Promise<IManutencao> {
   const agora = new Date().toISOString();
-  const data = dados.data ?? agora;
-  const lote = db.lotes.find((l) => l.id === dados.loteId);
+  const [config, lotes] = await Promise.all([carregarConfig(), listarLotes()]);
+  const lote = lotes.find((l) => l.id === dados.loteId);
 
   const nova: IManutencao = {
     id: uuid(),
     loteId: dados.loteId,
-    data,
+    data: dados.data ?? agora,
     diaMaceracao: lote ? diasDesdeProducao(lote.dataProducao) : 0,
-    acoes: dados.acoes ?? [...db.config.rotina.acoes],
-    observacao: dados.observacao,
+    acoes: dados.acoes ?? [...config.rotina.acoes],
+    observacao: dados.observacao ?? '',
     criadoEm: agora,
   };
 
-  db.manutencoes.push(nova);
-  salvarDB(db);
+  await setDoc(docEm('manutencoes', nova.id), nova);
   return nova;
 }
 
-// Desfaz a manutencao de hoje (caso tenha marcado sem querer)
-export function desfazerManutencaoHoje(loteId: string): void {
-  const db = carregarDB();
-  db.manutencoes = db.manutencoes.filter(
-    (m) => !(m.loteId === loteId && mesmoDia(m.data, new Date()))
-  );
-  salvarDB(db);
+export async function desfazerManutencaoHoje(loteId: string): Promise<void> {
+  const snap = await getDocs(query(col('manutencoes'), where('loteId', '==', loteId)));
+  const batch = writeBatch(fs);
+  snap.docs
+    .filter((d) => mesmoDia((d.data() as IManutencao).data, new Date()))
+    .forEach((d) => batch.delete(d.ref));
+  await batch.commit();
 }
 
 // ------------------------------------------------------------
-// CONFIG
+// BACKUP
 // ------------------------------------------------------------
-export function carregarConfig(): IConfig {
-  return carregarDB().config;
+export async function exportarBackup(): Promise<string> {
+  const [config, materiasPrimas, perfumes, lotes, avaliacoes, manutencoes] =
+    await Promise.all([
+      carregarConfig(),
+      listarMateriasPrimas(),
+      listarPerfumes(),
+      listarLotes(),
+      listarAvaliacoes(),
+      listarManutencoes(),
+    ]);
+
+  const formulas = await lerTodos<IFormula>('formulas');
+
+  const backup: ISillageDB = {
+    schemaVersion: SCHEMA_VERSION,
+    config,
+    materiasPrimas,
+    perfumes,
+    formulas,
+    lotes,
+    avaliacoes,
+    manutencoes,
+    exportadoEm: new Date().toISOString(),
+  };
+
+  return JSON.stringify(backup, null, 2);
 }
 
-export function salvarConfig(config: Partial<IConfig>): IConfig {
-  const db = carregarDB();
-  db.config = { ...db.config, ...config, atualizadoEm: new Date().toISOString() };
-  salvarDB(db);
-  return db.config;
-}
-
-// ------------------------------------------------------------
-// BACKUP - EXPORTAR / IMPORTAR
-// ------------------------------------------------------------
-export function exportarBackup(): string {
-  const db = carregarDB();
-  db.exportadoEm = new Date().toISOString();
-  return JSON.stringify(db, null, 2); // JSON legivel
-}
-
-export function baixarBackup(): void {
-  const conteudo = exportarBackup();
+export async function baixarBackup(): Promise<void> {
+  const conteudo = await exportarBackup();
   const blob = new Blob([conteudo], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const data = new Date().toISOString().slice(0, 10);
   a.href = url;
-  a.download = `sillage_backup_${data}.json`;
+  a.download = `sillage_backup_${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-export function importarBackup(jsonTexto: string): boolean {
+// Importa um backup (usado tambem para migrar do LocalStorage)
+export async function importarBackup(jsonTexto: string): Promise<boolean> {
   try {
     const dados = JSON.parse(jsonTexto) as ISillageDB;
-    if (!dados.schemaVersion || !Array.isArray(dados.perfumes)) {
-      throw new Error('Arquivo invalido');
+    if (!Array.isArray(dados.perfumes)) throw new Error('invalido');
+
+    const batch = writeBatch(fs);
+
+    if (dados.config) {
+      batch.set(
+        docLab(),
+        { schemaVersion: SCHEMA_VERSION, config: dados.config },
+        { merge: true }
+      );
     }
-    salvarDB(migrar(dados));
+
+    (dados.materiasPrimas ?? []).forEach((m) =>
+      batch.set(docEm('materiasPrimas', m.id), m)
+    );
+    (dados.perfumes ?? []).forEach((p) => batch.set(docEm('perfumes', p.id), p));
+    (dados.formulas ?? []).forEach((f) => batch.set(docEm('formulas', f.id), f));
+    (dados.lotes ?? []).forEach((l) => batch.set(docEm('lotes', l.id), l));
+    (dados.avaliacoes ?? []).forEach((a) =>
+      batch.set(docEm('avaliacoes', a.id), a)
+    );
+    (dados.manutencoes ?? []).forEach((m) =>
+      batch.set(docEm('manutencoes', m.id), m)
+    );
+
+    await batch.commit();
     return true;
   } catch {
     return false;
   }
 }
 
-// Apaga TUDO (usado na tela de Configuracoes)
-export function resetarTudo(): void {
-  localStorage.removeItem(STORAGE_KEY);
-  sessionStorage.removeItem('sillage_logado');
+// Migra os dados que estavam no LocalStorage desta maquina
+export async function migrarDoLocalStorage(): Promise<boolean> {
+  const raw = localStorage.getItem('sillage_lab_db');
+  if (!raw) return false;
+  const ok = await importarBackup(raw);
+  if (ok) localStorage.setItem('sillage_lab_db_migrado', raw);
+  return ok;
+}
+
+// Apaga TODOS os dados do laboratorio na nuvem
+export async function resetarTudo(): Promise<void> {
+  const colecoes = [
+    'perfumes',
+    'formulas',
+    'lotes',
+    'avaliacoes',
+    'manutencoes',
+    'materiasPrimas',
+  ];
+  for (const nome of colecoes) {
+    const snap = await getDocs(col(nome));
+    const batch = writeBatch(fs);
+    snap.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await setDoc(docLab(), { schemaVersion: SCHEMA_VERSION, config: configPadrao() });
 }
