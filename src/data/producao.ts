@@ -125,6 +125,5 @@ export function moeda(valor: number): string {
 // Mostra quantidades pequenas com mais precisao
 export function qtd(valor: number, unidade: string): string {
   if (valor < 1) return `${valor.toFixed(2)} ${unidade}`;
-  if (valor < 10) return `${valor.toFixed(1)} ${unidade}`;
-  return `${Math.round(valor)} ${unidade}`;
+  return `${valor.toFixed(1)} ${unidade}`;
 }
