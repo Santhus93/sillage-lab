@@ -1,9 +1,12 @@
 /* ============================================================
    SILLAGE LAB - CSS BASE
    Arquivo: src/index.css
-   Limpo: o visual e todo controlado pelo Material UI (theme.ts).
-   Aqui ficam apenas os resets essenciais.
+   Tipografia de perfumaria nicho + animacoes sutis.
    ============================================================ */
+
+/* Cormorant Garamond = serifada elegante (titulos/marca)
+   Jost = geometrica limpa (interface) */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Jost:wght@300;400;500;600&display=swap');
 
 * {
   box-sizing: border-box;
@@ -19,27 +22,107 @@ body,
 }
 
 body {
-  font-family: 'Poppins', 'Helvetica', 'Arial', sans-serif;
+  font-family: 'Jost', 'Helvetica', 'Arial', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #1a1a1a;
+  background-color: #12100e;
+
+  /* Brilho dourado muito sutil no topo, como um spot de vitrine */
+  background-image:
+    radial-gradient(
+      ellipse 80% 50% at 50% -10%,
+      rgba(176, 141, 87, 0.13),
+      transparent 70%
+    );
+  background-attachment: fixed;
 }
 
-/* Barra de rolagem discreta (combina com o tema escuro) */
+/* ---------- Barra de rolagem discreta ---------- */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1a1a1a;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3d3d3d;
+  background: #3a342c;
   border-radius: 8px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: #b08d57;
+}
+
+/* ---------- Animacoes ---------- */
+
+/* Conteudo entrando suavemente ao trocar de tela */
+@keyframes sillageFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sillage-fade {
+  animation: sillageFadeUp 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Brilho dourado atravessando o texto da marca (bem devagar) */
+@keyframes sillageShine {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.sillage-marca {
+  background: linear-gradient(
+    100deg,
+    #d9d4cc 20%,
+    #e8cfa3 40%,
+    #b08d57 50%,
+    #e8cfa3 60%,
+    #d9d4cc 80%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: sillageShine 7s linear infinite;
+}
+
+/* Respeita quem prefere menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  .sillage-fade,
+  .sillage-marca {
+    animation: none;
+  }
+  .sillage-marca {
+    -webkit-text-fill-color: #d9d4cc;
+  }
+}
+
+/* Remove as setinhas feias dos campos numericos */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Seleção de texto em dourado */
+::selection {
+  background: rgba(176, 141, 87, 0.35);
 }

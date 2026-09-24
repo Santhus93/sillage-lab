@@ -1,8 +1,8 @@
 // ============================================================
 // SILLAGE LAB - APP PRINCIPAL
 // Arquivo: src/App.tsx
-// Tema + Login local + Menu lateral + Navegacao
-// Todas as telas plugadas (MVP completo)
+// Tema + Login + Menu RESPONSIVO + Navegacao
+// No celular o menu vira gaveta (botao ☰); no desktop fica fixo.
 // ============================================================
 
 import { useState, useEffect } from 'react';
@@ -26,7 +26,11 @@ import {
   Divider,
   Alert,
   Badge,
+  useMediaQuery,
+  Tooltip,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
+import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import SpaIcon from '@mui/icons-material/Spa';
 import ScienceIcon from '@mui/icons-material/Science';
@@ -37,6 +41,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
 
 import theme, { cores } from './theme/theme';
+import Marca from './components/Marca';
 import { carregarConfig, salvarConfig, lotesPendentesRotina } from './data/db';
 import Dashboard from './pages/Dashboard';
 import Perfumes from './pages/Perfumes';
@@ -46,7 +51,7 @@ import Maceracao from './pages/Maceracao';
 import MateriasPrimas from './pages/MateriasPrimas';
 import Configuracoes from './pages/Configuracoes';
 
-const LARGURA_MENU = 240;
+const LARGURA_MENU = 248;
 
 type Tela =
   | 'dashboard'
@@ -67,6 +72,16 @@ const MENU: { id: Tela; texto: string; icone: ReactNode }[] = [
   { id: 'config', texto: 'Configuracoes', icone: <SettingsIcon /> },
 ];
 
+const TITULOS: Record<Tela, string> = {
+  dashboard: 'Dashboard',
+  perfumes: 'Perfumes',
+  formulas: 'Formulas',
+  lotes: 'Lotes',
+  maceracao: 'Maceracao',
+  materias: 'Materias-Primas',
+  config: 'Configuracoes',
+};
+
 // Hash simples (NAO e seguranca de banco, so evita senha em texto puro)
 function hashSimples(txt: string): string {
   let h = 0;
@@ -75,6 +90,15 @@ function hashSimples(txt: string): string {
     h |= 0;
   }
   return String(h);
+}
+
+// Saudacao pelo horario - detalhe humano
+function saudacao(): string {
+  const h = new Date().getHours();
+  if (h < 5) return 'Boa madrugada';
+  if (h < 12) return 'Bom dia';
+  if (h < 18) return 'Boa tarde';
+  return 'Boa noite';
 }
 
 // ------------------------------------------------------------
@@ -120,37 +144,49 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: cores.pretoPrincipal,
         p: 2,
       }}
     >
-      <Paper sx={{ p: 5, width: 380, textAlign: 'center' }}>
-        <Typography variant="h3" sx={{ letterSpacing: '0.3em', mb: 0.5 }}>
-          SILLAGE
-        </Typography>
+      <Paper
+        className="sillage-fade"
+        sx={{
+          p: { xs: 3.5, sm: 5 },
+          width: '100%',
+          maxWidth: 390,
+          textAlign: 'center',
+          border: `1px solid ${alpha(cores.dourado, 0.2)}`,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
+        }}
+      >
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1 }}>
+          <Marca tamanho="grande" />
+        </Box>
+
         <Typography
-          variant="overline"
-          sx={{ color: cores.dourado, letterSpacing: '0.4em' }}
+          variant="caption"
+          sx={{ color: cores.cinzaMedio, letterSpacing: '0.16em' }}
         >
-          LAB
+          LABORATORIO DE FORMULACAO
         </Typography>
 
-        <Divider sx={{ my: 3, borderColor: 'rgba(176,141,87,0.3)' }} />
+        <Divider sx={{ my: 3 }} />
 
         <Typography variant="body2" sx={{ color: cores.cinzaClaro, mb: 3 }}>
           {primeiroAcesso
             ? 'Primeiro acesso — defina sua senha'
-            : 'Bem-vindo de volta'}
+            : `${saudacao()}, ${config.usuario}`}
         </Typography>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <TextField
-            label="Usuario"
-            value={usuario}
-            onChange={(e) => setUsuario(e.target.value)}
-            fullWidth
-            size="small"
-          />
+          {primeiroAcesso && (
+            <TextField
+              label="Usuario"
+              value={usuario}
+              onChange={(e) => setUsuario(e.target.value)}
+              fullWidth
+              size="small"
+            />
+          )}
           <TextField
             label="Senha"
             type="password"
@@ -158,7 +194,8 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
             onChange={(e) => setSenha(e.target.value)}
             fullWidth
             size="small"
-            onKeyDown={(e) => e.key === 'Enter' && !primeiroAcesso && entrar()}
+            autoFocus
+            onKeyDown={(e) => e.key === 'Enter' && entrar()}
           />
           {primeiroAcesso && (
             <TextField
@@ -168,6 +205,7 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
               onChange={(e) => setSenha2(e.target.value)}
               fullWidth
               size="small"
+              onKeyDown={(e) => e.key === 'Enter' && entrar()}
             />
           )}
 
@@ -177,20 +215,143 @@ function Login({ onEntrar }: { onEntrar: () => void }) {
             {primeiroAcesso ? 'Criar acesso' : 'Entrar'}
           </Button>
         </Box>
+
+        <Typography
+          variant="caption"
+          sx={{ display: 'block', mt: 3, color: alpha(cores.cinzaMedio, 0.7) }}
+        >
+          Seus dados ficam apenas neste dispositivo.
+        </Typography>
       </Paper>
     </Box>
   );
 }
 
 // ------------------------------------------------------------
-// LAYOUT PRINCIPAL (menu + conteudo)
+// CONTEUDO DO MENU (compartilhado entre desktop e celular)
+// ------------------------------------------------------------
+function ConteudoMenu({
+  tela,
+  aoEscolher,
+  pendentes,
+}: {
+  tela: Tela;
+  aoEscolher: (t: Tela) => void;
+  pendentes: number;
+}) {
+  return (
+    <>
+      <Toolbar sx={{ px: 2.5 }}>
+        <Marca tamanho="pequeno" />
+      </Toolbar>
+      <Divider />
+
+      <List sx={{ mt: 1, px: 1 }}>
+        {MENU.map((item) => {
+          const ativo = tela === item.id;
+          return (
+            <ListItemButton
+              key={item.id}
+              selected={ativo}
+              onClick={() => aoEscolher(item.id)}
+              sx={{
+                borderRadius: 2.5,
+                mb: 0.5,
+                position: 'relative',
+                transition: 'background-color .2s ease',
+                '&.Mui-selected': {
+                  bgcolor: alpha(cores.dourado, 0.14),
+                  '&:hover': { bgcolor: alpha(cores.dourado, 0.2) },
+                  // marcador dourado na lateral
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    left: 0,
+                    top: '22%',
+                    height: '56%',
+                    width: 3,
+                    borderRadius: 4,
+                    background: `linear-gradient(${cores.douradoClaro}, ${cores.dourado})`,
+                  },
+                },
+              }}
+            >
+              <ListItemIcon
+                sx={{
+                  color: ativo ? cores.dourado : cores.cinzaMedio,
+                  minWidth: 40,
+                }}
+              >
+                {item.id === 'maceracao' && pendentes > 0 ? (
+                  <Badge
+                    badgeContent={pendentes}
+                    sx={{
+                      '& .MuiBadge-badge': {
+                        bgcolor: cores.dourado,
+                        color: '#17140F',
+                        fontWeight: 700,
+                        fontSize: '0.65rem',
+                        minWidth: 18,
+                        height: 18,
+                      },
+                    }}
+                  >
+                    {item.icone}
+                  </Badge>
+                ) : (
+                  item.icone
+                )}
+              </ListItemIcon>
+              <ListItemText
+                primary={
+                  <Typography
+                    sx={{
+                      fontSize: 14,
+                      fontWeight: ativo ? 600 : 400,
+                      color: ativo ? cores.branco : cores.cinzaClaro,
+                    }}
+                  >
+                    {item.texto}
+                  </Typography>
+                }
+              />
+            </ListItemButton>
+          );
+        })}
+      </List>
+
+      <Box sx={{ flexGrow: 1 }} />
+      <Typography
+        variant="caption"
+        sx={{
+          p: 2.5,
+          color: alpha(cores.cinzaMedio, 0.6),
+          letterSpacing: '0.1em',
+        }}
+      >
+        Sillage Perfumaria
+      </Typography>
+    </>
+  );
+}
+
+// ------------------------------------------------------------
+// LAYOUT PRINCIPAL
 // ------------------------------------------------------------
 function Layout({ onSair }: { onSair: () => void }) {
   const [tela, setTela] = useState<Tela>('dashboard');
+  const [gaveta, setGaveta] = useState(false);
   const config = carregarConfig();
 
-  // Quantos lotes esperam a rotina hoje (badge no menu)
+  // < 900px = celular/tablet -> menu vira gaveta
+  const celular = useMediaQuery(theme.breakpoints.down('md'));
+
   const pendentes = lotesPendentesRotina().length;
+
+  function escolher(t: Tela) {
+    setTela(t);
+    setGaveta(false); // fecha a gaveta ao navegar no celular
+  }
 
   function renderTela() {
     switch (tela) {
@@ -215,103 +376,124 @@ function Layout({ onSair }: { onSair: () => void }) {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      {/* Barra superior */}
-      <AppBar position="fixed" sx={{ zIndex: 1201 }} elevation={0}>
-        <Toolbar>
-          <Typography variant="h6" sx={{ letterSpacing: '0.25em', flexGrow: 1 }}>
-            SILLAGE <span style={{ color: cores.dourado }}>LAB</span>
-          </Typography>
-          <Typography variant="body2" sx={{ color: cores.cinzaClaro, mr: 1 }}>
+      {/* ---------- BARRA SUPERIOR ---------- */}
+      <AppBar
+        position="fixed"
+        elevation={0}
+        sx={{
+          zIndex: (t) => t.zIndex.drawer + 1,
+          // no desktop a barra comeca depois do menu
+          width: { md: `calc(100% - ${LARGURA_MENU}px)` },
+          ml: { md: `${LARGURA_MENU}px` },
+        }}
+      >
+        <Toolbar sx={{ gap: 1 }}>
+          {celular && (
+            <IconButton
+              edge="start"
+              color="inherit"
+              onClick={() => setGaveta(true)}
+              sx={{ mr: 0.5 }}
+            >
+              <Badge
+                variant="dot"
+                invisible={pendentes === 0}
+                sx={{ '& .MuiBadge-badge': { bgcolor: cores.dourado } }}
+              >
+                <MenuIcon />
+              </Badge>
+            </IconButton>
+          )}
+
+          {celular ? (
+            <Marca tamanho="pequeno" comSimbolo={false} />
+          ) : (
+            <Typography
+              variant="h5"
+              sx={{ flexGrow: 1, color: cores.branco }}
+            >
+              {TITULOS[tela]}
+            </Typography>
+          )}
+
+          <Box sx={{ flexGrow: 1 }} />
+
+          <Typography
+            variant="body2"
+            sx={{
+              color: cores.cinzaMedio,
+              mr: 0.5,
+              display: { xs: 'none', sm: 'block' },
+            }}
+          >
             {config.usuario}
           </Typography>
-          <IconButton color="inherit" onClick={onSair} title="Sair">
-            <LogoutIcon />
-          </IconButton>
+          <Tooltip title="Sair">
+            <IconButton color="inherit" onClick={onSair} size="small">
+              <LogoutIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
 
-      {/* Menu lateral */}
+      {/* ---------- MENU CELULAR (gaveta temporaria) ---------- */}
+      <Drawer
+        variant="temporary"
+        open={gaveta}
+        onClose={() => setGaveta(false)}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          display: { xs: 'block', md: 'none' },
+          '& .MuiDrawer-paper': {
+            width: LARGURA_MENU,
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        }}
+      >
+        <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />
+      </Drawer>
+
+      {/* ---------- MENU DESKTOP (fixo) ---------- */}
       <Drawer
         variant="permanent"
         sx={{
+          display: { xs: 'none', md: 'block' },
           width: LARGURA_MENU,
           flexShrink: 0,
           '& .MuiDrawer-paper': {
             width: LARGURA_MENU,
             boxSizing: 'border-box',
-            bgcolor: cores.pretoPrincipal,
-            borderRight: '1px solid rgba(176,141,87,0.15)',
+            display: 'flex',
+            flexDirection: 'column',
           },
         }}
       >
-        <Toolbar />
-        <List sx={{ mt: 1 }}>
-          {MENU.map((item) => (
-            <ListItemButton
-              key={item.id}
-              selected={tela === item.id}
-              onClick={() => setTela(item.id)}
-              sx={{
-                mx: 1,
-                borderRadius: 2,
-                mb: 0.5,
-                '&.Mui-selected': {
-                  bgcolor: 'rgba(176,141,87,0.15)',
-                  '&:hover': { bgcolor: 'rgba(176,141,87,0.22)' },
-                },
-              }}
-            >
-              <ListItemIcon
-                sx={{
-                  color: tela === item.id ? cores.dourado : cores.cinzaMedio,
-                  minWidth: 40,
-                }}
-              >
-                {item.id === 'maceracao' && pendentes > 0 ? (
-                  <Badge
-                    badgeContent={pendentes}
-                    sx={{
-                      '& .MuiBadge-badge': {
-                        bgcolor: cores.dourado,
-                        color: cores.pretoPrincipal,
-                        fontWeight: 700,
-                      },
-                    }}
-                  >
-                    {item.icone}
-                  </Badge>
-                ) : (
-                  item.icone
-                )}
-              </ListItemIcon>
-              <ListItemText
-                primary={
-                  <Typography
-                    sx={{
-                      fontSize: 14,
-                      color: tela === item.id ? cores.branco : cores.cinzaClaro,
-                    }}
-                  >
-                    {item.texto}
-                  </Typography>
-                }
-              />
-            </ListItemButton>
-          ))}
-        </List>
+        <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />
       </Drawer>
 
-      {/* Conteudo */}
-      <Box component="main" sx={{ flexGrow: 1, p: 3, minWidth: 0 }}>
+      {/* ---------- CONTEUDO ---------- */}
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          p: { xs: 2, sm: 3 },
+          minWidth: 0,
+          width: { md: `calc(100% - ${LARGURA_MENU}px)` },
+        }}
+      >
         <Toolbar />
-        {renderTela()}
+        {/* key faz a animacao rodar a cada troca de tela */}
+        <Box key={tela} className="sillage-fade">
+          {renderTela()}
+        </Box>
       </Box>
     </Box>
   );
 }
 
 // ------------------------------------------------------------
-// APP (decide entre Login e Layout)
+// APP
 // ------------------------------------------------------------
 export default function App() {
   const [logado, setLogado] = useState(false);
