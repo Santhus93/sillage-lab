@@ -160,7 +160,15 @@ function CardMetrica({
               {icone}
             </Box>
             <Box>
-              <Typography variant="h4" sx={{ fontWeight: 500, lineHeight: 1 }}>
+               <Typography
+                variant="h4"
+                sx={{
+                  fontFamily: '"Jost", sans-serif',
+                  fontWeight: 600,
+                  lineHeight: 1,
+                  color: cores.branco,
+                }}
+              >
                 {valor}
               </Typography>
               <Typography variant="caption" sx={{ color: cores.cinzaMedio }}>

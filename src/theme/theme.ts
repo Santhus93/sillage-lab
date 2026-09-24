@@ -72,6 +72,7 @@ export const theme = createTheme({
       fontWeight: 500,
       letterSpacing: '0.06em',
       color: cores.branco,
+      fontVariantNumeric: 'lining-nums',
     },
     h5: { fontFamily: '"Cormorant Garamond", serif', fontWeight: 500, letterSpacing: '0.04em' },
     h6: { fontWeight: 500, letterSpacing: '0.02em', fontSize: '1.05rem' },
