@@ -1,0 +1,57 @@
+# ============================================================
+# SILLAGE LAB - PUBLICACAO AUTOMATICA NO GITHUB PAGES
+# Arquivo: .github/workflows/deploy.yml
+# Toda vez que voce der "git push", o site e reconstruido
+# e publicado sozinho. Nao precisa fazer nada manual.
+# ============================================================
+
+name: Deploy Sillage Lab
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # permite publicar manualmente pelo site do GitHub
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar o Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Gerar o build de producao
+        run: npm run build
+
+      - name: Preparar artefato do Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar no GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

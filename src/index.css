@@ -1,0 +1,45 @@
+/* ============================================================
+   SILLAGE LAB - CSS BASE
+   Arquivo: src/index.css
+   Limpo: o visual e todo controlado pelo Material UI (theme.ts).
+   Aqui ficam apenas os resets essenciais.
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
+}
+
+body {
+  font-family: 'Poppins', 'Helvetica', 'Arial', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #1a1a1a;
+}
+
+/* Barra de rolagem discreta (combina com o tema escuro) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3d3d3d;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b08d57;
+}
