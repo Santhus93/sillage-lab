@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - FORMULAS
 // Arquivo: src/pages/Formulas.tsx
-// Composicao do perfume com versionamento (nuvem)
+// v5: alcool automatico (100% - concentrado - agua)
 // ============================================================
 
 import { useState, useMemo, useEffect } from 'react';
@@ -25,6 +25,8 @@ import {
   Divider,
   Alert,
   Tooltip,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -84,7 +86,8 @@ export default function Formulas() {
   const [versoes, setVersoes] = useState<IFormula[]>([]);
   const [itens, setItens] = useState<IFormulaItem[]>([]);
   const [concentrado, setConcentrado] = useState(25);
-  const [alcool, setAlcool] = useState(73);
+  const [alcool, setAlcool] = useState(73);       // usado apenas quando manual
+  const [alcoolAuto, setAlcoolAuto] = useState(true);
   const [agua, setAgua] = useState(2);
   const [observacoes, setObservacoes] = useState('');
   const [msg, setMsg] = useState('');
@@ -93,11 +96,14 @@ export default function Formulas() {
   const [novaMateria, setNovaMateria] = useState('');
   const [novoPercentual, setNovoPercentual] = useState<number | ''>('');
 
-  // Solventes entram na diluicao final, nao no concentrado
   const materiasConcentrado = base.materias.filter((m) => m.tipo !== 'Solvente');
   const ativa = versoes.find((v) => v.ativa);
 
-  // Carrega as versoes ao trocar de perfume
+  // Alcool efetivo: automatico (100 - concentrado - agua) ou manual
+  const alcoolEfetivo = alcoolAuto
+    ? Math.max(0, Math.round((100 - concentrado - agua) * 100) / 100)
+    : alcool;
+
   useEffect(() => {
     if (!perfumeId) {
       setVersoes([]);
@@ -113,12 +119,16 @@ export default function Formulas() {
         setConcentrado(f.percentualConcentrado);
         setAlcool(f.percentualAlcool);
         setAgua(f.percentualAgua ?? 0);
+        // Formulas antigas nao tem o campo - assume manual para
+        // nao alterar silenciosamente um valor ja salvo.
+        setAlcoolAuto(f.alcoolAutomatico === true);
         setObservacoes(f.observacoes ?? '');
       } else {
         setItens([]);
         setConcentrado(25);
         setAlcool(73);
         setAgua(2);
+        setAlcoolAuto(true); // formula nova: incentiva o modo automatico
         setObservacoes('');
       }
     });
@@ -167,14 +177,14 @@ export default function Formulas() {
 
   const totais = useMemo(() => {
     const totalItens = itens.reduce((s, i) => s + (i.percentual || 0), 0);
-    const totalDiluicao = concentrado + alcool + agua;
+    const totalDiluicao = concentrado + alcoolEfetivo + agua;
     return {
       totalItens,
       totalDiluicao,
       itensOk: Math.abs(totalItens - 100) < 0.01,
       diluicaoOk: Math.abs(totalDiluicao - 100) < 0.01,
     };
-  }, [itens, concentrado, alcool, agua]);
+  }, [itens, concentrado, alcoolEfetivo, agua]);
 
   async function salvar() {
     setMsg('');
@@ -193,8 +203,9 @@ export default function Formulas() {
         perfumeId,
         itens,
         percentualConcentrado: concentrado,
-        percentualAlcool: alcool,
+        percentualAlcool: alcoolEfetivo,
         percentualAgua: agua,
+        alcoolAutomatico: alcoolAuto,
         ativa: true,
         observacoes,
       });
@@ -473,6 +484,17 @@ export default function Formulas() {
 
               <Divider sx={{ mb: 2 }} />
 
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={alcoolAuto}
+                    onChange={(e) => setAlcoolAuto(e.target.checked)}
+                  />
+                }
+                label="Calcular alcool automaticamente (100% − concentrado − agua)"
+                sx={{ mb: 1.5 }}
+              />
+
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
                 <TextField
                   label="Concentrado (%)"
@@ -485,10 +507,12 @@ export default function Formulas() {
                 <TextField
                   label="Alcool (%)"
                   type="number"
-                  value={alcool}
+                  value={alcoolEfetivo}
                   onChange={(e) => setAlcool(Number(e.target.value))}
                   size="small"
                   sx={{ flex: '1 1 160px' }}
+                  disabled={alcoolAuto}
+                  helperText={alcoolAuto ? 'Calculado automaticamente' : ' '}
                 />
                 <TextField
                   label="Agua (%)"

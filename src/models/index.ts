@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MODELO DE DADOS
 // Arquivo: src/models/index.ts
-// v4: campos de avaliacao (contratipo) na materia-prima
+// v5: densidade por materia-prima, embalagem e alcool automatico
 // ============================================================
 
 
@@ -48,19 +48,23 @@ export type DiaSemana = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 // Rotina durante a maceracao
 export type AcaoManutencao = 'Agitar' | 'Arejar';
 
-// Avaliacao de essencia pronta / contratipo (nosso proprio teste,
-// nao de terceiros) - usado dentro da materia-prima
+// Avaliacao de essencia pronta / contratipo (nosso proprio teste)
 export type StatusAvaliacao = 'Testando' | 'Aprovado' | 'Reprovado' | 'Macerando';
+
+// Tipos de componente de embalagem
+export type TipoEmbalagem = 'Vidro' | 'Valvula' | 'Tampa' | 'Adesivo' | 'Caixa' | 'Outro';
 
 
 // ------------------------------------------------------------
 // 2. MATERIA-PRIMA
 // ------------------------------------------------------------
 // Cobre tanto insumos "crus" (Ambroxan, Alcool...) quanto
-// essencias prontas / contratipos compradas de fornecedores
-// (Baccarat Rouge 540, Good Girl...). Nesse segundo caso, os
-// campos de avaliacao abaixo registram o teste do proprio
-// laboratorio Sillage antes de decidir usar em producao.
+// essencias prontas / contratipos comprados de fornecedores.
+// A "densidade" converte volume <-> massa com precisao: o
+// concentrado e calculado por volume (ml), mas muitos insumos
+// sao pesados em gramas na bancada. Sem densidade, o sistema
+// assume 1 g = 1 ml (o padrao da agua), o que gera erro em
+// oleos mais leves ou mais pesados.
 
 export interface IMateriaPrima {
   id: string;
@@ -68,23 +72,50 @@ export interface IMateriaPrima {
   tipo: NotaPiramide;
   unidade: UnidadeMedida;
 
+  densidade?: number;          // g/ml - padrao 1 se nao informado
+
   estoqueAtual: number;
   estoqueMinimo: number;
 
   fornecedor?: string;
-  custoPorUnidade?: number;   // R$ por g/ml
+  custoPorUnidade?: number;    // R$ por g/ml
   loteFornecedor?: string;
   validade?: string;
   ultimaCompra?: string;
 
   // Avaliacao (opcional - essencias prontas / contratipos)
-  inspiracao?: string;        // perfume original que ela imita
+  inspiracao?: string;
   genero?: Categoria;
   statusAvaliacao?: StatusAvaliacao;
   avaliadoPor?: string;
   dataAvaliacao?: string;
-  feedbackAvaliacao?: string; // fixacao, projecao, observacoes
+  feedbackAvaliacao?: string;
 
+  observacoes?: string;
+  ativo: boolean;
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
+
+// ------------------------------------------------------------
+// 2b. EMBALAGEM
+// ------------------------------------------------------------
+// Componentes do produto final (vidro, tampa, valvula, adesivo,
+// caixa). Separado de materia-prima porque tem natureza
+// diferente: e contado por unidade/frasco, nao por % de formula.
+
+export interface IEmbalagem {
+  id: string;
+  nome: string;                // "Vidro 50ml", "Tampa dourada"
+  tipo: TipoEmbalagem;
+  tamanhoMl?: number;           // preenchido quando tipo = Vidro
+
+  custoUnitario: number;       // R$ por unidade
+  estoqueAtual: number;
+  estoqueMinimo: number;
+
+  fornecedor?: string;
   observacoes?: string;
   ativo: boolean;
   criadoEm: string;
@@ -123,7 +154,7 @@ export interface IPerfume {
 
 export interface IFormulaItem {
   materiaPrimaId: string;
-  percentual: number;         // % dentro do concentrado
+  percentual: number;          // % dentro do concentrado
   nota?: NotaPiramide;
   ordem?: number;
 }
@@ -138,6 +169,11 @@ export interface IFormula {
   percentualConcentrado: number;
   percentualAlcool: number;
   percentualAgua?: number;
+
+  // Se true, percentualAlcool e SEMPRE recalculado como
+  // (100 - concentrado - agua) ao salvar. Reduz erro de
+  // digitacao e mantem a diluicao sempre fechando em 100%.
+  alcoolAutomatico?: boolean;
 
   ativa: boolean;
   observacoes?: string;
@@ -155,9 +191,10 @@ export interface IItemCalculado {
   nome: string;
   tipo?: NotaPiramide;
   unidade: UnidadeMedida;
+  densidade: number;
 
   percentual: number;
-  quantidade: number;
+  quantidade: number;          // ja convertida para a unidade do insumo
   custo?: number;
 
   estoqueAtual: number;
@@ -172,8 +209,29 @@ export interface ICalculoProducao {
 
   itens: IItemCalculado[];
 
-  custoTotal: number;
+  custoTotal: number;          // apenas insumos (concentrado + alcool)
   custoPorMl: number;
+  temEstoqueCompleto: boolean;
+  faltantes: string[];
+}
+
+// Consumo de embalagem calculado para um volume de producao
+export interface IItemEmbalagemCalculado {
+  embalagemId: string;
+  nome: string;
+  tipo: TipoEmbalagem;
+  custoUnitario: number;
+  quantidadePorFrasco: number;
+  quantidadeTotal: number;
+  custoTotal: number;
+  estoqueAtual: number;
+  suficiente: boolean;
+}
+
+export interface ICalculoEmbalagem {
+  quantidadeFrascos: number;
+  itens: IItemEmbalagemCalculado[];
+  custoTotal: number;
   temEstoqueCompleto: boolean;
   faltantes: string[];
 }
@@ -197,6 +255,15 @@ export interface IConsumoLote {
   custo?: number;
 }
 
+export interface IConsumoEmbalagem {
+  embalagemId: string;
+  nome: string;
+  quantidadePorFrasco: number;
+  quantidadeTotal: number;
+  custoUnitario: number;
+  custoTotal: number;
+}
+
 export interface ILote {
   id: string;
   codigo: string;
@@ -211,9 +278,18 @@ export interface ILote {
   dataPrevista: string;
   marcos: IMarcoMaceracao[];
 
-  consumo?: IConsumoLote[];
-  custoTotal?: number;
-  baixouEstoque?: boolean;
+  // Producao / custo
+  consumo?: IConsumoLote[];         // materias-primas consumidas
+  custoTotal?: number;              // custo dos insumos (concentrado + alcool)
+  baixouEstoque?: boolean;          // se o estoque de insumos foi descontado
+
+  // Embalagem
+  tamanhoFrascoMl?: number;
+  quantidadeFrascos?: number;
+  embalagemConsumo?: IConsumoEmbalagem[];
+  custoEmbalagem?: number;
+  custoGeral?: number;               // custoTotal + custoEmbalagem
+  baixouEstoqueEmbalagem?: boolean;
 
   statusManual?: StatusLote;
   observacoes?: string;
@@ -298,6 +374,7 @@ export interface ISillageDB {
   schemaVersion: number;
   config: IConfig;
   materiasPrimas: IMateriaPrima[];
+  embalagens: IEmbalagem[];
   perfumes: IPerfume[];
   formulas: IFormula[];
   lotes: ILote[];
@@ -347,5 +424,10 @@ export const DIAS_CURTOS: Record<DiaSemana, string> = {
   6: 'Sab',
 };
 
+// Tamanhos de vidro mais comuns (sugestao rapida no formulario)
+export const TAMANHOS_VIDRO_COMUNS = [15, 25, 30, 50, 75, 100, 125, 200];
+
+export const DENSIDADE_PADRAO = 1; // g/ml (agua) - usado quando nao informado
+
 export const STORAGE_KEY = 'sillage_lab_db';
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;

@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - APP PRINCIPAL
 // Arquivo: src/App.tsx
-// v3: sem titulo duplicado + convite para instalar (PWA)
+// v5: menu com Embalagens
 // ============================================================
 
 import { useState, useEffect } from 'react';
@@ -40,6 +40,7 @@ import ScienceIcon from '@mui/icons-material/Science';
 import LocalDrinkIcon from '@mui/icons-material/LocalDrink';
 import EventIcon from '@mui/icons-material/Event';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
+import AllInboxIcon from '@mui/icons-material/AllInbox';
 import SettingsIcon from '@mui/icons-material/Settings';
 import LogoutIcon from '@mui/icons-material/Logout';
 import CloudDoneIcon from '@mui/icons-material/CloudDone';
@@ -69,6 +70,7 @@ import Formulas from './pages/Formulas';
 import Lotes from './pages/Lotes';
 import Maceracao from './pages/Maceracao';
 import MateriasPrimas from './pages/MateriasPrimas';
+import Embalagens from './pages/Embalagens';
 import Configuracoes from './pages/Configuracoes';
 
 const LARGURA_MENU = 248;
@@ -80,6 +82,7 @@ type Tela =
   | 'lotes'
   | 'maceracao'
   | 'materias'
+  | 'embalagens'
   | 'config';
 
 const MENU: { id: Tela; texto: string; icone: ReactNode }[] = [
@@ -89,6 +92,7 @@ const MENU: { id: Tela; texto: string; icone: ReactNode }[] = [
   { id: 'lotes', texto: 'Lotes', icone: <LocalDrinkIcon /> },
   { id: 'maceracao', texto: 'Maceracao', icone: <EventIcon /> },
   { id: 'materias', texto: 'Materias-Primas', icone: <Inventory2Icon /> },
+  { id: 'embalagens', texto: 'Embalagens', icone: <AllInboxIcon /> },
   { id: 'config', texto: 'Configuracoes', icone: <SettingsIcon /> },
 ];
 
@@ -100,7 +104,6 @@ function saudacao(): string {
   return 'Boa noite';
 }
 
-// Evento de instalacao do PWA (tipagem minima)
 interface EventoInstalacao extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
@@ -173,10 +176,7 @@ function Login() {
           <Marca tamanho="grande" />
         </Box>
 
-        <Typography
-          variant="caption"
-          sx={{ color: cores.cinzaMedio, letterSpacing: '0.16em' }}
-        >
+        <Typography variant="caption" sx={{ color: cores.cinzaMedio, letterSpacing: '0.16em' }}>
           LABORATORIO DE FORMULACAO
         </Typography>
 
@@ -358,7 +358,6 @@ function Layout({ user }: { user: User }) {
   const celular = useMediaQuery(theme.breakpoints.down('md'));
   const nome = nomeExibicao(user);
 
-  // Captura o convite de instalacao do navegador
   useEffect(() => {
     function aoPoderInstalar(e: Event) {
       e.preventDefault();
@@ -387,12 +386,12 @@ function Layout({ user }: { user: User }) {
           listarLotes(),
           listarManutencoes(),
         ]);
-        const qtd = lotes.filter(
+        const q = lotes.filter(
           (l) =>
             loteEmMaceracao(l) &&
             !manutencoes.some((m) => m.loteId === l.id && mesmoDia(m.data, new Date()))
         ).length;
-        if (ativo) setPendentes(qtd);
+        if (ativo) setPendentes(q);
       } catch {
         if (ativo) setPendentes(0);
       }
@@ -421,6 +420,8 @@ function Layout({ user }: { user: User }) {
         return <Maceracao />;
       case 'materias':
         return <MateriasPrimas />;
+      case 'embalagens':
+        return <Embalagens />;
       case 'config':
         return <Configuracoes />;
       default:
@@ -441,12 +442,7 @@ function Layout({ user }: { user: User }) {
       >
         <Toolbar sx={{ gap: 1 }}>
           {celular && (
-            <IconButton
-              edge="start"
-              color="inherit"
-              onClick={() => setGaveta(true)}
-              sx={{ mr: 0.5 }}
-            >
+            <IconButton edge="start" color="inherit" onClick={() => setGaveta(true)} sx={{ mr: 0.5 }}>
               <Badge
                 variant="dot"
                 invisible={pendentes === 0}
@@ -471,11 +467,7 @@ function Layout({ user }: { user: User }) {
 
           <Typography
             variant="body2"
-            sx={{
-              color: cores.cinzaMedio,
-              mr: 0.5,
-              display: { xs: 'none', sm: 'block' },
-            }}
+            sx={{ color: cores.cinzaMedio, mr: 0.5, display: { xs: 'none', sm: 'block' } }}
           >
             {nome}
           </Typography>
@@ -494,11 +486,7 @@ function Layout({ user }: { user: User }) {
         ModalProps={{ keepMounted: true }}
         sx={{
           display: { xs: 'block', md: 'none' },
-          '& .MuiDrawer-paper': {
-            width: LARGURA_MENU,
-            display: 'flex',
-            flexDirection: 'column',
-          },
+          '& .MuiDrawer-paper': { width: LARGURA_MENU, display: 'flex', flexDirection: 'column' },
         }}
       >
         <ConteudoMenu tela={tela} aoEscolher={escolher} pendentes={pendentes} />

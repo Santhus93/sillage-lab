@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - MATERIAS-PRIMAS
 // Arquivo: src/pages/MateriasPrimas.tsx
-// v4: secao de avaliacao (essencia pronta / contratipo)
+// v5: densidade (g/ml) para conversao correta de peso/volume
 // ============================================================
 
 import { useState } from 'react';
@@ -45,6 +45,7 @@ import type {
   Categoria,
   StatusAvaliacao,
 } from '../models';
+import { DENSIDADE_PADRAO } from '../models';
 import {
   listarMateriasPrimas,
   salvarMateriaPrima,
@@ -69,7 +70,6 @@ function corTipo(tipo: NotaPiramide): string {
   }
 }
 
-// Cor do status de avaliacao (nosso proprio teste, nao de terceiros)
 function corStatusAvaliacao(s: StatusAvaliacao): string {
   switch (s) {
     case 'Aprovado': return cores.prontoVenda;
@@ -89,6 +89,7 @@ function materiaVazia(): Partial<IMateriaPrima> {
     nome: '',
     tipo: 'Corpo',
     unidade: 'g',
+    densidade: DENSIDADE_PADRAO,
     estoqueAtual: 0,
     estoqueMinimo: 0,
     fornecedor: '',
@@ -125,7 +126,7 @@ export default function MateriasPrimas() {
   }
 
   function abrirEdicao(m: IMateriaPrima) {
-    setForm({ ...m });
+    setForm({ ...m, densidade: m.densidade ?? DENSIDADE_PADRAO });
     setErroForm('');
     setMostrarAvaliacao(
       Boolean(m.inspiracao || m.statusAvaliacao || m.feedbackAvaliacao)
@@ -147,6 +148,7 @@ export default function MateriasPrimas() {
         nome: form.nome!.trim(),
         tipo: form.tipo as NotaPiramide,
         unidade: form.unidade as UnidadeMedida,
+        densidade: Number(form.densidade) || DENSIDADE_PADRAO,
         estoqueAtual: Number(form.estoqueAtual) || 0,
         estoqueMinimo: Number(form.estoqueMinimo) || 0,
         fornecedor: form.fornecedor ?? '',
@@ -155,7 +157,6 @@ export default function MateriasPrimas() {
           : undefined,
         observacoes: form.observacoes ?? '',
         ativo: form.ativo ?? true,
-        // Avaliacao (so grava se a secao estiver preenchida)
         inspiracao: mostrarAvaliacao ? (form.inspiracao ?? '') : '',
         genero: mostrarAvaliacao ? form.genero : undefined,
         statusAvaliacao: mostrarAvaliacao ? form.statusAvaliacao : undefined,
@@ -250,9 +251,10 @@ export default function MateriasPrimas() {
                 <TableRow>
                   <TableCell>Nome</TableCell>
                   <TableCell>Tipo</TableCell>
+                  <TableCell align="right">Densidade</TableCell>
                   <TableCell align="right">Estoque</TableCell>
                   <TableCell align="right">Minimo</TableCell>
-                  <TableCell sx={{ width: 120 }}>Nivel</TableCell>
+                  <TableCell sx={{ width: 110 }}>Nivel</TableCell>
                   <TableCell>Fornecedor</TableCell>
                   <TableCell align="right">Custo</TableCell>
                   <TableCell align="right">Acoes</TableCell>
@@ -264,6 +266,7 @@ export default function MateriasPrimas() {
                   const base = Math.max(m.estoqueMinimo * 2, 1);
                   const pct = Math.min((m.estoqueAtual / base) * 100, 100);
                   const temAvaliacao = Boolean(m.statusAvaliacao);
+                  const densidade = m.densidade ?? DENSIDADE_PADRAO;
 
                   return (
                     <TableRow key={m.id} hover>
@@ -310,6 +313,19 @@ export default function MateriasPrimas() {
                             fontWeight: 600,
                           }}
                         />
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color:
+                              densidade !== DENSIDADE_PADRAO
+                                ? cores.douradoClaro
+                                : cores.cinzaMedio,
+                          }}
+                        >
+                          {densidade.toFixed(2)}
+                        </Typography>
                       </TableCell>
                       <TableCell align="right">
                         <Typography
@@ -418,6 +434,16 @@ export default function MateriasPrimas() {
               ))}
             </TextField>
             <TextField
+              label="Densidade (g/ml)"
+              type="number"
+              value={form.densidade ?? DENSIDADE_PADRAO}
+              onChange={(e) => setForm({ ...form, densidade: Number(e.target.value) })}
+              sx={{ flex: '1 1 150px' }}
+              size="small"
+              slotProps={{ htmlInput: { step: 0.01, min: 0.1 } }}
+              helperText="1 = agua • ~0,95 maioria dos oleos"
+            />
+            <TextField
               label="Estoque atual"
               type="number"
               value={form.estoqueAtual ?? 0}
@@ -486,14 +512,7 @@ export default function MateriasPrimas() {
                 </Button>
               ) : (
                 <>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
-                      mb: 1.5,
-                    }}
-                  >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
                     <RateReviewIcon fontSize="small" sx={{ color: cores.dourado }} />
                     <Typography variant="subtitle2">
                       Avaliacao (essencia pronta / contratipo)

@@ -1,7 +1,8 @@
 // ============================================================
 // SILLAGE LAB - LOTES
 // Arquivo: src/pages/Lotes.tsx
-// v3: calculadora de producao, baixa de estoque e custo
+// v5: embalagem (vidro/tampa/valvula/adesivo/caixa) no calculo
+// de producao, com custo geral (insumos + embalagem)
 // ============================================================
 
 import { useState, useEffect } from 'react';
@@ -31,6 +32,7 @@ import {
   TableRow,
   FormControlLabel,
   Switch,
+  Checkbox,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import AddIcon from '@mui/icons-material/Add';
@@ -44,6 +46,7 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import ScaleIcon from '@mui/icons-material/Scale';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import PaidIcon from '@mui/icons-material/Paid';
+import AllInboxIcon from '@mui/icons-material/AllInbox';
 
 import { cores } from '../theme/theme';
 import type {
@@ -52,8 +55,10 @@ import type {
   IAvaliacao,
   IManutencao,
   IMateriaPrima,
+  IEmbalagem,
   IConfig,
   ICalculoProducao,
+  ICalculoEmbalagem,
   StatusLote,
 } from '../models';
 import { MACERACAO_PADRAO } from '../models';
@@ -63,6 +68,7 @@ import {
   listarAvaliacoes,
   listarManutencoes,
   listarMateriasPrimas,
+  listarEmbalagens,
   carregarConfig,
   formulaAtiva,
   criarLote,
@@ -73,7 +79,15 @@ import {
   salvarAvaliacao,
   loteEmMaceracao,
 } from '../data/db';
-import { calcularProducao, montarConsumo, moeda, qtd } from '../data/producao';
+import {
+  calcularProducao,
+  montarConsumo,
+  calcularFrascos,
+  calcularEmbalagem,
+  montarConsumoEmbalagem,
+  moeda,
+  qtd,
+} from '../data/producao';
 import { useDados } from '../hooks/useDados';
 import { Carregando, ErroTela, Vazio, Cabecalho } from '../components/Estados';
 
@@ -111,20 +125,22 @@ interface Base {
   avaliacoes: IAvaliacao[];
   manutencoes: IManutencao[];
   materias: IMateriaPrima[];
+  embalagens: IEmbalagem[];
   config: IConfig;
 }
 
 async function carregarBase(): Promise<Base> {
-  const [lotes, perfumes, avaliacoes, manutencoes, materias, config] =
+  const [lotes, perfumes, avaliacoes, manutencoes, materias, embalagens, config] =
     await Promise.all([
       listarLotes(),
       listarPerfumes(),
       listarAvaliacoes(),
       listarManutencoes(),
       listarMateriasPrimas(),
+      listarEmbalagens(),
       carregarConfig(),
     ]);
-  return { lotes, perfumes, avaliacoes, manutencoes, materias, config };
+  return { lotes, perfumes, avaliacoes, manutencoes, materias, embalagens, config };
 }
 
 export default function Lotes() {
@@ -138,7 +154,7 @@ export default function Lotes() {
   const [erroForm, setErroForm] = useState('');
   const [salvando, setSalvando] = useState(false);
 
-  // Novo lote
+  // Novo lote - dados basicos
   const [perfumeId, setPerfumeId] = useState('');
   const [volume, setVolume] = useState(500);
   const [dataProducao, setDataProducao] = useState(hojeInput());
@@ -148,6 +164,11 @@ export default function Lotes() {
   const [calculo, setCalculo] = useState<ICalculoProducao | null>(null);
   const [formulaId, setFormulaId] = useState('');
 
+  // Novo lote - embalagem
+  const [tamanhoFrasco, setTamanhoFrasco] = useState(100);
+  const [itensEmbalagem, setItensEmbalagem] = useState<Record<string, boolean>>({});
+  const [qtdPorFrasco, setQtdPorFrasco] = useState<Record<string, number>>({});
+
   // Avaliacao
   const [avalAberto, setAvalAberto] = useState(false);
   const [loteAval, setLoteAval] = useState<ILote | null>(null);
@@ -156,7 +177,7 @@ export default function Lotes() {
   const [projecao, setProjecao] = useState<number | ''>('');
   const [obsAval, setObsAval] = useState('');
 
-  // Recalcula sempre que muda perfume ou volume
+  // Recalcula o concentrado sempre que muda perfume ou volume
   useEffect(() => {
     if (!perfumeId || !base) {
       setCalculo(null);
@@ -183,7 +204,7 @@ export default function Lotes() {
 
   if (carregando || !base) return <Carregando />;
 
-  const { lotes, perfumes, avaliacoes, manutencoes, config } = base;
+  const { lotes, perfumes, avaliacoes, manutencoes, embalagens, config } = base;
 
   function nomePerfume(id: string): string {
     const p = perfumes.find((x) => x.id === id);
@@ -199,6 +220,9 @@ export default function Lotes() {
     setErroForm('');
     setCalculo(null);
     setBaixarEstoque(config.baixaEstoqueAutomatica);
+    setTamanhoFrasco(100);
+    setItensEmbalagem({});
+    setQtdPorFrasco({});
     setAberto(true);
   }
 
@@ -207,6 +231,23 @@ export default function Lotes() {
     const p = perfumes.find((x) => x.id === id);
     if (p) setMaceracaoDias(p.maceracaoDias ?? MACERACAO_PADRAO[p.concentracao]);
   }
+
+  function alternarEmbalagem(id: string) {
+    setItensEmbalagem((s) => ({ ...s, [id]: !s[id] }));
+    setQtdPorFrasco((s) => ({ ...s, [id]: s[id] ?? 1 }));
+  }
+
+  // Quantidade de frascos e calculo de embalagem (derivados, recalculados a cada render)
+  const quantidadeFrascos = calcularFrascos(Number(volume) || 0, tamanhoFrasco);
+  const selecaoEmbalagem = embalagens
+    .filter((e) => itensEmbalagem[e.id])
+    .map((e) => ({ embalagem: e, quantidadePorFrasco: qtdPorFrasco[e.id] ?? 1 }));
+  const calculoEmbalagem: ICalculoEmbalagem | null =
+    selecaoEmbalagem.length > 0 && quantidadeFrascos > 0
+      ? calcularEmbalagem(selecaoEmbalagem, quantidadeFrascos)
+      : null;
+
+  const custoGeral = (calculo?.custoTotal ?? 0) + (calculoEmbalagem?.custoTotal ?? 0);
 
   async function salvarLote() {
     setErroForm('');
@@ -231,6 +272,12 @@ export default function Lotes() {
         consumo: calculo ? montarConsumo(calculo) : [],
         custoTotal: calculo?.custoTotal ?? 0,
         baixarEstoque,
+        tamanhoFrascoMl: calculoEmbalagem ? tamanhoFrasco : undefined,
+        quantidadeFrascos: calculoEmbalagem ? quantidadeFrascos : undefined,
+        embalagemConsumo: calculoEmbalagem
+          ? montarConsumoEmbalagem(calculoEmbalagem)
+          : [],
+        custoEmbalagem: calculoEmbalagem?.custoTotal ?? 0,
       });
       setAberto(false);
       recarregar();
@@ -249,8 +296,8 @@ export default function Lotes() {
   }
 
   async function remover(l: ILote) {
-    const aviso = l.baixouEstoque
-      ? '\nO estoque consumido sera devolvido as materias-primas.'
+    const aviso = l.baixouEstoque || l.baixouEstoqueEmbalagem
+      ? '\nO estoque consumido (insumos e/ou embalagem) sera devolvido.'
       : '';
     if (window.confirm(`Excluir o lote ${l.codigo}?${aviso}`)) {
       await excluirLote(l.id);
@@ -326,6 +373,7 @@ export default function Lotes() {
               .sort((a, b) => a.data.localeCompare(b.data));
             const aberto2 = expandido === l.id;
             const macerando = loteEmMaceracao(l);
+            const custoGeralLote = l.custoGeral ?? l.custoTotal ?? 0;
 
             return (
               <Card key={l.id}>
@@ -351,7 +399,8 @@ export default function Lotes() {
                       </Typography>
                       <Typography variant="caption" sx={{ color: cores.cinzaMedio }}>
                         {l.volumeMl} ml • {dataBR(l.dataProducao)} • {dias} dia(s)
-                        {l.custoTotal ? ` • ${moeda(l.custoTotal)}` : ''}
+                        {l.quantidadeFrascos ? ` • ${l.quantidadeFrascos} frasco(s)` : ''}
+                        {custoGeralLote ? ` • ${moeda(custoGeralLote)}` : ''}
                       </Typography>
                     </Box>
 
@@ -442,25 +491,20 @@ export default function Lotes() {
                       {l.observacoes && ` • ${l.observacoes}`}
                     </Typography>
 
-                    {/* Ficha de producao */}
+                    {/* Ficha de insumos */}
                     {l.consumo && l.consumo.length > 0 && (
                       <>
                         <Divider sx={{ my: 2 }} />
-                        <Box
-                          sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}
-                        >
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
                           <ScaleIcon fontSize="small" sx={{ color: cores.dourado }} />
                           <Typography variant="subtitle2">
-                            Ficha de producao
+                            Insumos consumidos
                           </Typography>
                           {l.baixouEstoque && (
                             <Chip
                               label="estoque baixado"
                               size="small"
-                              sx={{
-                                bgcolor: `${cores.prontoVenda}22`,
-                                color: cores.prontoVenda,
-                              }}
+                              sx={{ bgcolor: `${cores.prontoVenda}22`, color: cores.prontoVenda }}
                             />
                           )}
                         </Box>
@@ -486,10 +530,7 @@ export default function Lotes() {
                                     </Typography>
                                   </TableCell>
                                   <TableCell align="right">
-                                    <Typography
-                                      variant="body2"
-                                      sx={{ color: cores.cinzaMedio }}
-                                    >
+                                    <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
                                       {c.custo ? moeda(c.custo) : '—'}
                                     </Typography>
                                   </TableCell>
@@ -500,31 +541,113 @@ export default function Lotes() {
                         </TableContainer>
 
                         {l.custoTotal ? (
-                          <Box
-                            sx={{
-                              display: 'flex',
-                              gap: 2,
-                              mt: 1.5,
-                              flexWrap: 'wrap',
-                            }}
+                          <Typography
+                            variant="caption"
+                            sx={{ display: 'block', mt: 1, color: cores.cinzaMedio }}
                           >
-                            <Chip
-                              icon={<PaidIcon />}
-                              label={`Custo do lote: ${moeda(l.custoTotal)}`}
-                              sx={{
-                                bgcolor: 'rgba(176,141,87,0.15)',
-                                color: cores.dourado,
-                                fontWeight: 700,
-                              }}
-                            />
-                            <Chip
-                              label={`${moeda(l.custoTotal / l.volumeMl)} / ml`}
-                              variant="outlined"
-                              size="small"
-                            />
-                          </Box>
+                            Subtotal insumos: <strong>{moeda(l.custoTotal)}</strong>
+                          </Typography>
                         ) : null}
                       </>
+                    )}
+
+                    {/* Ficha de embalagem */}
+                    {l.embalagemConsumo && l.embalagemConsumo.length > 0 && (
+                      <>
+                        <Divider sx={{ my: 2 }} />
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                          <AllInboxIcon fontSize="small" sx={{ color: cores.dourado }} />
+                          <Typography variant="subtitle2">
+                            Embalagem
+                            {l.quantidadeFrascos
+                              ? ` • ${l.quantidadeFrascos} frasco(s) de ${l.tamanhoFrascoMl}ml`
+                              : ''}
+                          </Typography>
+                          {l.baixouEstoqueEmbalagem && (
+                            <Chip
+                              label="estoque baixado"
+                              size="small"
+                              sx={{ bgcolor: `${cores.prontoVenda}22`, color: cores.prontoVenda }}
+                            />
+                          )}
+                        </Box>
+
+                        <TableContainer>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow>
+                                <TableCell>Item</TableCell>
+                                <TableCell align="right">Qtd. total</TableCell>
+                                <TableCell align="right">Custo</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {l.embalagemConsumo.map((e) => (
+                                <TableRow key={e.embalagemId}>
+                                  <TableCell>
+                                    <Typography variant="body2">{e.nome}</Typography>
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Typography variant="body2">
+                                      {e.quantidadeTotal} un
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell align="right">
+                                    <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
+                                      {moeda(e.custoTotal)}
+                                    </Typography>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </TableContainer>
+
+                        {l.custoEmbalagem ? (
+                          <Typography
+                            variant="caption"
+                            sx={{ display: 'block', mt: 1, color: cores.cinzaMedio }}
+                          >
+                            Subtotal embalagem: <strong>{moeda(l.custoEmbalagem)}</strong>
+                          </Typography>
+                        ) : null}
+                      </>
+                    )}
+
+                    {/* Custo geral */}
+                    {custoGeralLote > 0 && (
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          gap: 2,
+                          mt: 2,
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <Chip
+                          icon={<PaidIcon />}
+                          label={`Custo geral do lote: ${moeda(custoGeralLote)}`}
+                          sx={{
+                            bgcolor: 'rgba(176,141,87,0.15)',
+                            color: cores.dourado,
+                            fontWeight: 700,
+                          }}
+                        />
+                        {l.quantidadeFrascos ? (
+                          <Chip
+                            label={`${moeda(custoGeralLote / l.quantidadeFrascos)} / frasco`}
+                            variant="outlined"
+                            size="small"
+                          />
+                        ) : (
+                          <Chip
+                            label={`${moeda(custoGeralLote / l.volumeMl)} / ml`}
+                            variant="outlined"
+                            size="small"
+                          />
+                        )}
+                      </Box>
                     )}
 
                     {/* Manutencoes */}
@@ -538,10 +661,7 @@ export default function Lotes() {
                         <Chip
                           label="rotina encerrada"
                           size="small"
-                          sx={{
-                            bgcolor: 'rgba(255,255,255,0.06)',
-                            color: cores.cinzaMedio,
-                          }}
+                          sx={{ bgcolor: 'rgba(255,255,255,0.06)', color: cores.cinzaMedio }}
                         />
                       )}
                     </Box>
@@ -578,10 +698,7 @@ export default function Lotes() {
                                 {m.acoes.join(' + ')}
                               </Typography>
                               {m.observacao && (
-                                <Typography
-                                  variant="caption"
-                                  sx={{ color: cores.cinzaClaro }}
-                                >
+                                <Typography variant="caption" sx={{ color: cores.cinzaClaro }}>
                                   — {m.observacao}
                                 </Typography>
                               )}
@@ -698,7 +815,7 @@ export default function Lotes() {
             />
           </Box>
 
-          {/* ---------- FICHA DE PESAGEM ---------- */}
+          {/* ---------- FICHA DE PESAGEM (insumos) ---------- */}
           {calculo && (
             <Box sx={{ mt: 3 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
@@ -710,11 +827,7 @@ export default function Lotes() {
                 <Chip
                   label={`Concentrado: ${calculo.volumeConcentradoMl} ml`}
                   size="small"
-                  sx={{
-                    bgcolor: 'rgba(176,141,87,0.15)',
-                    color: cores.dourado,
-                    fontWeight: 600,
-                  }}
+                  sx={{ bgcolor: 'rgba(176,141,87,0.15)', color: cores.dourado, fontWeight: 600 }}
                 />
                 <Chip
                   label={`Alcool: ${calculo.volumeAlcoolMl} ml`}
@@ -731,16 +844,14 @@ export default function Lotes() {
               </Box>
 
               <TableContainer
-                sx={{
-                  border: `1px solid ${alpha(cores.dourado, 0.15)}`,
-                  borderRadius: 2,
-                }}
+                sx={{ border: `1px solid ${alpha(cores.dourado, 0.15)}`, borderRadius: 2 }}
               >
                 <Table size="small">
                   <TableHead>
                     <TableRow>
                       <TableCell>Ingrediente</TableCell>
                       <TableCell align="right">%</TableCell>
+                      <TableCell align="right">Densid.</TableCell>
                       <TableCell align="right">Pesar</TableCell>
                       <TableCell align="right">Estoque</TableCell>
                       <TableCell align="right">Custo</TableCell>
@@ -766,6 +877,11 @@ export default function Lotes() {
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
+                          <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
+                            {i.unidade === 'g' ? i.densidade.toFixed(2) : '—'}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
                           <Typography
                             variant="body2"
                             sx={{ fontWeight: 700, color: cores.douradoClaro }}
@@ -776,9 +892,7 @@ export default function Lotes() {
                         <TableCell align="right">
                           <Typography
                             variant="body2"
-                            sx={{
-                              color: i.suficiente ? cores.cinzaMedio : cores.descartado,
-                            }}
+                            sx={{ color: i.suficiente ? cores.cinzaMedio : cores.descartado }}
                           >
                             {qtd(i.estoqueAtual, i.unidade)}
                           </Typography>
@@ -794,51 +908,198 @@ export default function Lotes() {
                 </Table>
               </TableContainer>
 
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: 1.5,
-                  mt: 2,
-                }}
-              >
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={baixarEstoque}
-                      onChange={(e) => setBaixarEstoque(e.target.checked)}
-                    />
-                  }
-                  label="Descontar do estoque ao produzir"
-                />
-                {calculo.custoTotal > 0 && (
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <Chip
-                      icon={<PaidIcon />}
-                      label={`Custo: ${moeda(calculo.custoTotal)}`}
-                      sx={{
-                        bgcolor: 'rgba(176,141,87,0.15)',
-                        color: cores.dourado,
-                        fontWeight: 700,
-                      }}
-                    />
-                    <Chip
-                      label={`${moeda(calculo.custoPorMl)} / ml`}
-                      variant="outlined"
-                      size="small"
-                    />
-                  </Box>
-                )}
-              </Box>
-
               {!calculo.temEstoqueCompleto && (
                 <Alert severity="warning" sx={{ mt: 2 }}>
                   Estoque insuficiente de: <strong>{calculo.faltantes.join(', ')}</strong>.
                   Voce pode produzir mesmo assim — o estoque ficara negativo.
                 </Alert>
               )}
+            </Box>
+          )}
+
+          {/* ---------- EMBALAGEM (opcional) ---------- */}
+          {embalagens.length > 0 && (
+            <Box sx={{ mt: 3 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                <AllInboxIcon sx={{ color: cores.dourado }} />
+                <Typography variant="h6">Embalagem (opcional)</Typography>
+              </Box>
+
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', mb: 2 }}>
+                <TextField
+                  label="Tamanho do frasco (ml)"
+                  type="number"
+                  value={tamanhoFrasco}
+                  onChange={(e) => setTamanhoFrasco(Number(e.target.value))}
+                  size="small"
+                  sx={{ flex: '1 1 200px' }}
+                />
+                {quantidadeFrascos > 0 && (
+                  <Chip
+                    label={`= ${quantidadeFrascos} frasco(s)`}
+                    sx={{ bgcolor: `${cores.prontoVenda}22`, color: cores.prontoVenda, fontWeight: 700 }}
+                  />
+                )}
+              </Box>
+
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {embalagens.map((e) => {
+                  const marcado = Boolean(itensEmbalagem[e.id]);
+                  return (
+                    <Box
+                      key={e.id}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                        flexWrap: 'wrap',
+                        p: 0.5,
+                        borderRadius: 1,
+                        bgcolor: marcado ? alpha(cores.dourado, 0.06) : 'transparent',
+                      }}
+                    >
+                      <Checkbox
+                        checked={marcado}
+                        onChange={() => alternarEmbalagem(e.id)}
+                        size="small"
+                        sx={{ color: cores.dourado, p: 0.5 }}
+                      />
+                      <Typography variant="body2" sx={{ minWidth: 160 }}>
+                        {e.nome}
+                        {e.tamanhoMl ? ` (${e.tamanhoMl}ml)` : ''}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: cores.cinzaMedio }}>
+                        {moeda(e.custoUnitario)}/un • estoque {e.estoqueAtual}
+                      </Typography>
+                      {marcado && (
+                        <TextField
+                          label="Qtd/frasco"
+                          type="number"
+                          size="small"
+                          value={qtdPorFrasco[e.id] ?? 1}
+                          onChange={(ev) =>
+                            setQtdPorFrasco({
+                              ...qtdPorFrasco,
+                              [e.id]: Number(ev.target.value),
+                            })
+                          }
+                          sx={{ width: 110 }}
+                        />
+                      )}
+                    </Box>
+                  );
+                })}
+              </Box>
+
+              {calculoEmbalagem && (
+                <>
+                  <TableContainer
+                    sx={{ mt: 2, border: `1px solid ${alpha(cores.dourado, 0.15)}`, borderRadius: 2 }}
+                  >
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Item</TableCell>
+                          <TableCell align="right">Qtd. total</TableCell>
+                          <TableCell align="right">Estoque</TableCell>
+                          <TableCell align="right">Custo</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {calculoEmbalagem.itens.map((i) => (
+                          <TableRow key={i.embalagemId}>
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
+                                {!i.suficiente && (
+                                  <WarningAmberIcon
+                                    fontSize="small"
+                                    sx={{ color: cores.descartado }}
+                                  />
+                                )}
+                                <Typography variant="body2">{i.nome}</Typography>
+                              </Box>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" sx={{ fontWeight: 700, color: cores.douradoClaro }}>
+                                {i.quantidadeTotal} un
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography
+                                variant="body2"
+                                sx={{ color: i.suficiente ? cores.cinzaMedio : cores.descartado }}
+                              >
+                                {i.estoqueAtual} un
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" sx={{ color: cores.cinzaMedio }}>
+                                {moeda(i.custoTotal)}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+
+                  {!calculoEmbalagem.temEstoqueCompleto && (
+                    <Alert severity="warning" sx={{ mt: 2 }}>
+                      Estoque insuficiente de: <strong>{calculoEmbalagem.faltantes.join(', ')}</strong>.
+                    </Alert>
+                  )}
+                </>
+              )}
+            </Box>
+          )}
+
+          {/* ---------- RESUMO GERAL ---------- */}
+          {(calculo || calculoEmbalagem) && (
+            <Box
+              sx={{
+                mt: 3,
+                p: 2,
+                borderRadius: 2,
+                bgcolor: alpha(cores.dourado, 0.06),
+                border: `1px solid ${alpha(cores.dourado, 0.2)}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 1.5,
+              }}
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={baixarEstoque}
+                    onChange={(e) => setBaixarEstoque(e.target.checked)}
+                  />
+                }
+                label="Descontar do estoque ao produzir"
+              />
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Chip
+                  icon={<PaidIcon />}
+                  label={`Custo geral: ${moeda(custoGeral)}`}
+                  sx={{ bgcolor: 'rgba(176,141,87,0.2)', color: cores.dourado, fontWeight: 700 }}
+                />
+                {quantidadeFrascos > 0 ? (
+                  <Chip
+                    label={`${moeda(custoGeral / quantidadeFrascos)} / frasco`}
+                    variant="outlined"
+                    size="small"
+                  />
+                ) : (
+                  calculo && (
+                    <Chip
+                      label={`${moeda(custoGeral / (Number(volume) || 1))} / ml`}
+                      variant="outlined"
+                      size="small"
+                    />
+                  )
+                )}
+              </Box>
             </Box>
           )}
 

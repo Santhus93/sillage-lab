@@ -1,7 +1,7 @@
 // ============================================================
 // SILLAGE LAB - CAMADA DE DADOS (Firestore / nuvem)
 // Arquivo: src/data/db.ts
-// v3: baixa de estoque e custo ao produzir
+// v5: embalagem, densidade e baixa de estoque combinada
 // ============================================================
 
 import {
@@ -27,9 +27,11 @@ import type {
   ILote,
   IAvaliacao,
   IMateriaPrima,
+  IEmbalagem,
   IManutencao,
   IMarcoMaceracao,
   IConsumoLote,
+  IConsumoEmbalagem,
   ISillageDB,
   StatusLote,
   AcaoManutencao,
@@ -129,7 +131,7 @@ function configPadrao(): IConfig {
     baixaEstoqueAutomatica: true,
     tema: 'dark',
     moeda: 'BRL',
-    versaoApp: '3.0.0',
+    versaoApp: '4.0.0',
     atualizadoEm: new Date().toISOString(),
   };
 }
@@ -250,16 +252,39 @@ export async function excluirMateriaPrima(id: string): Promise<void> {
   await deleteDoc(docEm('materiasPrimas', id));
 }
 
-// Ajusta o estoque somando (positivo) ou subtraindo (negativo)
-export async function ajustarEstoque(
-  materiaPrimaId: string,
-  delta: number
-): Promise<void> {
-  await setDoc(
-    docEm('materiasPrimas', materiaPrimaId),
-    { estoqueAtual: increment(delta), atualizadoEm: new Date().toISOString() },
-    { merge: true }
-  );
+// ------------------------------------------------------------
+// EMBALAGENS
+// ------------------------------------------------------------
+export async function listarEmbalagens(): Promise<IEmbalagem[]> {
+  const lista = await lerTodos<IEmbalagem>('embalagens');
+  return lista.sort((a, b) => a.nome.localeCompare(b.nome));
+}
+
+export async function salvarEmbalagem(
+  e: Omit<IEmbalagem, 'id' | 'criadoEm' | 'atualizadoEm'> & { id?: string }
+): Promise<IEmbalagem> {
+  const agora = new Date().toISOString();
+
+  if (e.id) {
+    const snap = await getDoc(docEm('embalagens', e.id));
+    const antiga = snap.data() as IEmbalagem;
+    const atualizada = { ...antiga, ...e, id: e.id, atualizadoEm: agora };
+    await setDoc(docEm('embalagens', e.id), atualizada);
+    return atualizada;
+  }
+
+  const nova = {
+    ...e,
+    id: uuid(),
+    criadoEm: agora,
+    atualizadoEm: agora,
+  } as IEmbalagem;
+  await setDoc(docEm('embalagens', nova.id), nova);
+  return nova;
+}
+
+export async function excluirEmbalagem(id: string): Promise<void> {
+  await deleteDoc(docEm('embalagens', id));
 }
 
 // ------------------------------------------------------------
@@ -270,11 +295,6 @@ export async function listarFormulasDoPerfume(
 ): Promise<IFormula[]> {
   const snap = await getDocs(query(col('formulas'), where('perfumeId', '==', perfumeId)));
   return snap.docs.map((d) => d.data() as IFormula);
-}
-
-export async function buscarFormula(id: string): Promise<IFormula | undefined> {
-  const snap = await getDoc(docEm('formulas', id));
-  return snap.exists() ? (snap.data() as IFormula) : undefined;
 }
 
 export async function formulaAtiva(
@@ -327,7 +347,7 @@ export async function listarLotes(): Promise<ILote[]> {
   return lista.sort((a, b) => b.dataProducao.localeCompare(a.dataProducao));
 }
 
-// Cria o lote e, se pedido, ja desconta o estoque das materias
+// Cria o lote e, se pedido, ja desconta o estoque (insumos e embalagem)
 export async function criarLote(dados: {
   perfumeId: string;
   formulaId: string;
@@ -338,6 +358,10 @@ export async function criarLote(dados: {
   consumo?: IConsumoLote[];
   custoTotal?: number;
   baixarEstoque?: boolean;
+  tamanhoFrascoMl?: number;
+  quantidadeFrascos?: number;
+  embalagemConsumo?: IConsumoEmbalagem[];
+  custoEmbalagem?: number;
 }): Promise<ILote> {
   const agora = new Date().toISOString();
   const [config, lotes, perfumes] = await Promise.all([
@@ -354,6 +378,8 @@ export async function criarLote(dados: {
   const codigo = `${prefixo}-${dia}-${String(seq).padStart(3, '0')}`;
 
   const baixar = dados.baixarEstoque ?? false;
+  const custoEmbalagem = dados.custoEmbalagem ?? 0;
+  const custoTotal = dados.custoTotal ?? 0;
 
   const novo: ILote = {
     id: uuid(),
@@ -366,8 +392,14 @@ export async function criarLote(dados: {
     dataPrevista: addDias(dados.dataProducao, dados.maceracaoDias),
     marcos: gerarMarcos(dados.dataProducao, config.marcosPadrao),
     consumo: dados.consumo ?? [],
-    custoTotal: dados.custoTotal ?? 0,
+    custoTotal,
     baixouEstoque: baixar,
+    tamanhoFrascoMl: dados.tamanhoFrascoMl,
+    quantidadeFrascos: dados.quantidadeFrascos,
+    embalagemConsumo: dados.embalagemConsumo ?? [],
+    custoEmbalagem,
+    custoGeral: r2(custoTotal + custoEmbalagem),
+    baixouEstoqueEmbalagem: baixar && Boolean(dados.embalagemConsumo?.length),
     observacoes: dados.observacoes ?? '',
     criadoEm: agora,
     atualizadoEm: agora,
@@ -376,12 +408,18 @@ export async function criarLote(dados: {
   const batch = writeBatch(fs);
   batch.set(docEm('lotes', novo.id), novo);
 
-  // Desconta o estoque das materias-primas consumidas
-  if (baixar && dados.consumo?.length) {
-    dados.consumo.forEach((c) => {
+  if (baixar) {
+    dados.consumo?.forEach((c) => {
       batch.set(
         docEm('materiasPrimas', c.materiaPrimaId),
         { estoqueAtual: increment(-c.quantidade), atualizadoEm: agora },
+        { merge: true }
+      );
+    });
+    dados.embalagemConsumo?.forEach((e) => {
+      batch.set(
+        docEm('embalagens', e.embalagemId),
+        { estoqueAtual: increment(-e.quantidadeTotal), atualizadoEm: agora },
         { merge: true }
       );
     });
@@ -389,6 +427,10 @@ export async function criarLote(dados: {
 
   await batch.commit();
   return novo;
+}
+
+function r2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 export async function atualizarLote(
@@ -402,7 +444,7 @@ export async function atualizarLote(
   );
 }
 
-// Exclui o lote e, se o estoque tinha sido baixado, devolve
+// Exclui o lote e devolve o estoque (insumos e embalagem) se baixado
 export async function excluirLote(id: string): Promise<void> {
   const snap = await getDoc(docEm('lotes', id));
   const lote = snap.data() as ILote | undefined;
@@ -415,6 +457,16 @@ export async function excluirLote(id: string): Promise<void> {
       batch.set(
         docEm('materiasPrimas', c.materiaPrimaId),
         { estoqueAtual: increment(c.quantidade) },
+        { merge: true }
+      );
+    });
+  }
+
+  if (lote?.baixouEstoqueEmbalagem && lote.embalagemConsumo?.length) {
+    lote.embalagemConsumo.forEach((e) => {
+      batch.set(
+        docEm('embalagens', e.embalagemId),
+        { estoqueAtual: increment(e.quantidadeTotal) },
         { merge: true }
       );
     });
@@ -514,10 +566,11 @@ export async function desfazerManutencaoHoje(loteId: string): Promise<void> {
 // BACKUP
 // ------------------------------------------------------------
 export async function exportarBackup(): Promise<string> {
-  const [config, materiasPrimas, perfumes, lotes, avaliacoes, manutencoes] =
+  const [config, materiasPrimas, embalagens, perfumes, lotes, avaliacoes, manutencoes] =
     await Promise.all([
       carregarConfig(),
       listarMateriasPrimas(),
+      listarEmbalagens(),
       listarPerfumes(),
       listarLotes(),
       listarAvaliacoes(),
@@ -530,6 +583,7 @@ export async function exportarBackup(): Promise<string> {
     schemaVersion: SCHEMA_VERSION,
     config,
     materiasPrimas,
+    embalagens,
     perfumes,
     formulas,
     lotes,
@@ -570,6 +624,9 @@ export async function importarBackup(jsonTexto: string): Promise<boolean> {
     (dados.materiasPrimas ?? []).forEach((m) =>
       batch.set(docEm('materiasPrimas', m.id), m)
     );
+    (dados.embalagens ?? []).forEach((e) =>
+      batch.set(docEm('embalagens', e.id), e)
+    );
     (dados.perfumes ?? []).forEach((p) => batch.set(docEm('perfumes', p.id), p));
     (dados.formulas ?? []).forEach((f) => batch.set(docEm('formulas', f.id), f));
     (dados.lotes ?? []).forEach((l) => batch.set(docEm('lotes', l.id), l));
@@ -603,6 +660,7 @@ export async function resetarTudo(): Promise<void> {
     'avaliacoes',
     'manutencoes',
     'materiasPrimas',
+    'embalagens',
   ];
   for (const nome of colecoes) {
     const snap = await getDocs(col(nome));
